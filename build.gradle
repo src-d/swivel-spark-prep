@@ -1,0 +1,69 @@
+apply plugin: 'eclipse'
+apply plugin: 'idea'
+apply plugin: 'scala'
+apply plugin: 'com.github.johnrengelman.shadow'
+//for provided and optional scopes
+apply plugin: 'propdeps'
+apply plugin: 'propdeps-idea'
+apply plugin: 'propdeps-eclipse'
+
+buildscript {
+    repositories { 
+      jcenter()
+      maven { url 'http://repo.spring.io/plugins-release' }
+    }
+    dependencies {
+      classpath 'com.github.jengelman.gradle.plugins:shadow:1.2.4'
+      classpath 'org.springframework.build.gradle:propdeps-plugin:0.0.7'
+    }
+}
+
+repositories {
+  mavenCentral()
+  maven { url "https://oss.sonatype.org/content/repositories/snapshots/" }
+  //for hadoop-clinet in local shadowJar mode
+  maven { url "https://repository.cloudera.com/artifactory/cloudera-repos/" }
+}
+
+
+version = '0.0.1'
+jar {
+    manifest {
+        attributes 'Main-Class': 'com.srcd.swivel.SparkPrep'
+    }
+    archiveName "scslogs-${version}.jar"
+    from {
+        (configurations.default).collect {
+            it.isDirectory() ? it : zipTree(it)
+        }
+    }
+}
+
+shadowJar {
+  //add reourced to Jar
+  //append('reference.conf')
+}
+
+compileScala {
+    scalaCompileOptions.useCompileDaemon = true
+}
+tasks.withType(ScalaCompile) {
+    scalaCompileOptions.useAnt = false
+}
+
+ext {
+  scalaVersion = '2.11'
+  sparkVersion = '2.1.0'
+}
+
+dependencies {
+    compile "org.scala-lang:scala-library:$scalaVersion.4"
+
+    //spark
+    provided 'org.apache.hadoop:hadoop-client:2.0.0-mr1-cdh4.6.0'
+    provided "org.apache.spark:spark-core_$scalaVersion:$sparkVersion"
+    provided "org.apache.spark:spark-sql_$scalaVersion:$sparkVersion"
+    //provided "org.apache.spark:spark-streaming_$scalaVersion:$sparkVersion"
+
+    testCompile "org.scalatest:scalatest_$scalaVersion:2.1.7"
+}
