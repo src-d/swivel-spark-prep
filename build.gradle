@@ -60,7 +60,7 @@ dependencies {
     compile "org.scala-lang:scala-library:$scalaVersion.4"
 
     //spark
-    provided 'org.apache.hadoop:hadoop-client:2.0.0-mr1-cdh4.6.0'
+    provided 'org.apache.hadoop:hadoop-client:2.0.0-mr1-cdh4.6.0' //TODO(bzz): HDFS version
     provided "org.apache.spark:spark-core_$scalaVersion:$sparkVersion"
     provided "org.apache.spark:spark-sql_$scalaVersion:$sparkVersion"
     //provided "org.apache.spark:spark-streaming_$scalaVersion:$sparkVersion"
