@@ -15,18 +15,12 @@ class DictionaryTest extends FunSuite with SharedSparkContext {
     val tokenLine = Array("d\ta\tb\tc\ta", "b\tc\ta")
 
     // when
-    val words = buildDict(sc.parallelize(tokenLine)).collect()
+    val words = SparkPrep.buildDict(sc.parallelize(tokenLine))
 
 
     // then
     assert(words.length == 4)
     assert(words(0) === ("a", 3))
-  }
-
-  def buildDict(rdd: RDD[String]) = {
-    rdd.flatMap(_.split("\t"))
-        .map(word => (word, 1))
-        .reduceByKey(_ + _)
   }
 
 }

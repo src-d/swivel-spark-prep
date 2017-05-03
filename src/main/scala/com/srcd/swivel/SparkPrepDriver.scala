@@ -1,5 +1,6 @@
 package com.srcd.swivel
 
+import org.apache.spark.rdd.RDD
 import org.apache.spark.SparkContext
 import org.apache.spark.sql.SparkSession
 
@@ -8,9 +9,27 @@ import scala.util.Properties
 
 object SparkPrep {
 
+    def buildDict(rdd: RDD[String]): Seq[(String, Int)] = {
+     rdd.flatMap(_.split("\t"))
+        .map(word => (word, 1))
+        .reduceByKey(_ + _)
+        .collect()
+        .sortBy(-_._2)
+  }
+
+}
+
+object SparkPrepDriver {
+
   def main(args: Array[String]): Unit = {
+    if (args.length < 1) {
+      System.err.println("Usage: " + this.getClass.getSimpleName +" <inputFile>")
+      System.exit(1)
+    }
+
     //TODO(bzz): CLI args
     //  --input <filename>
+    val input = args(0)
     //  --output_dir <directory>
     //  --shard_size <int>
     //  --min_count <int>
@@ -22,12 +41,12 @@ object SparkPrep {
     val (sc, spark) = getContext(sparkMaster)
 
     //create id->word, and word->id dicts
-    val dict = sc.textFile("tokens_10.tsv")
-      .flatMap(_.split("\t"))
-      .map(word => (word, 1))
-      .reduceByKey(_ + _)
+    val dict = SparkPrep.buildDict(sc.textFile(input))
 
-    dict.collect() foreach println
+    dict.foreach { case (word, freq) =>
+      println(s"$word $freq")
+    }
+
     // sort
     // drop freq < FLAGS.min_count
     // num_words = min(len(vocab), FLAGS.max_vocab)
