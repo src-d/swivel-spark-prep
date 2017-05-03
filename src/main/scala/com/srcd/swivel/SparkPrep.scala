@@ -25,7 +25,7 @@ object SparkPrep {
     val dict = sc.textFile("tokens_10.tsv")
       .flatMap(_.split("\t"))
       .map(word => (word, 1))
-      .reduceByKey((a, b) => a + b)
+      .reduceByKey(_ + _)
 
     dict.collect() foreach println
     // sort
