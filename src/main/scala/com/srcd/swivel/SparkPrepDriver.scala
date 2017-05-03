@@ -9,12 +9,38 @@ import scala.util.Properties
 
 object SparkPrep {
 
-    def buildDict(rdd: RDD[String]): Seq[(String, Int)] = {
+  val _minCount = 5
+  val _maxVocab = 4096 * 64
+  val _shardSize = 4096
+
+  def buildHistogram(rdd: RDD[String]): Seq[(String, Int)] = {
      rdd.flatMap(_.split("\t"))
         .map(word => (word, 1))
         .reduceByKey(_ + _)
         .collect()
         .sortBy(-_._2)
+  }
+
+  def dictFromHist(
+      hist: Seq[(String, Int)],
+      minCount: Int = _minCount,
+      maxVocab: Int = _maxVocab,
+      shardSize: Int = _shardSize
+  ): Seq[(String, Int)] = {
+    var numWords = Math.min(hist.length, maxVocab)
+    if (numWords % shardSize != 0) {
+      numWords -= numWords % shardSize
+    }
+
+    hist
+      .filter(_._2 >= minCount)
+      .take(numWords)
+  }
+
+  def buildDict(rdd: RDD[String], minCount: Int = 5, maxVocab: Int = 4096 * 64, shardSize: Int = 4096): Seq[(String, Int)] = {
+    val hist = SparkPrep.buildHistogram(rdd)
+    val dict = SparkPrep.dictFromHist(hist, minCount, maxVocab, shardSize)
+    dict
   }
 
 }
@@ -46,12 +72,6 @@ object SparkPrepDriver {
     dict.foreach { case (word, freq) =>
       println(s"$word $freq")
     }
-
-    // sort
-    // drop freq < FLAGS.min_count
-    // num_words = min(len(vocab), FLAGS.max_vocab)
-    // adjust vocab, so num_words % FLAGS.shard_size == 0
-    // keep top num_words
 
     //Optimisations
     // 4b pointers: -XX:+UseCompressedOops if <32Gb RAM
