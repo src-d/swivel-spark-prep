@@ -72,5 +72,32 @@ class DictionaryTest extends FunSuite with SharedSparkContext {
     assert(vocab === expected)
   }
 
+  test("build vocabulary: dict -> vocab") {
+    // given
+    val dict = Seq(("a", 2), ("b", 1))
+
+    // when
+    val vocab = SparkPrep.vocabFromDict(dict)
+
+    // then
+    assert(vocab.size === dict.size)
+    assert(vocab contains "a")
+    assert(vocab("a") == 1)
+    assert(vocab contains "b")
+    assert(vocab("b") == 2)
+  }
+
+  test("build vocabulary: full word -> id") {
+    // given
+    val tokenLine = Array("d\ta\tb\tc\ta", "b\tc\ta")
+
+    // when
+    val (words, _) = SparkPrep.buildVocab(sc.parallelize(tokenLine), 2, 100, 3)
+
+    // then
+    assert(words.size == 3)
+    assert(words("a") === 1)
+  }
+
 
 }

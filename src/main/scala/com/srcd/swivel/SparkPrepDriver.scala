@@ -7,11 +7,23 @@ import org.apache.spark.sql.SparkSession
 import scala.util.Properties
 
 
+/**
+  * Distributed data pre-processing for Swivel algorithm https://arxiv.org/abs/1602.02215
+  *
+  * Is equivalent to prep.py (and fastprep) from
+  * https://github.com/tensorflow/models/tree/master/swivel#preparing-the-data-for-training
+  */
 object SparkPrep {
 
   val _minCount = 5
   val _maxVocab = 4096 * 64
   val _shardSize = 4096
+
+  /*
+   * Histogram:  word -> freq
+   * Dictionary: id -> (word, freq) _ordered_ seq of word freq tupes
+   * Vocabulary: word -> id _un-ordered_ Map
+   */
 
   def buildHistogram(rdd: RDD[String]): Seq[(String, Int)] = {
      rdd.flatMap(_.split("\t"))
@@ -31,17 +43,39 @@ object SparkPrep {
     if (numWords % shardSize != 0) {
       numWords -= numWords % shardSize
     }
-
     hist
       .filter(_._2 >= minCount)
       .take(numWords)
   }
 
-  def buildDict(rdd: RDD[String], minCount: Int = 5, maxVocab: Int = 4096 * 64, shardSize: Int = 4096): Seq[(String, Int)] = {
+  def vocabFromDict(dict: Seq[(String, Int)]): Map[String, Int] = {
+    val vocab = dict.view
+      .zip(Stream from 1)
+      .map { case ((word, _), id) =>
+        (word, id)
+      }
+      .toMap
+    vocab
+  }
+
+  /**
+    * Builds vocabulary: a map of word -> id
+    *
+    * @param rdd
+    * @param minCount
+    * @param maxVocab
+    * @param shardSize
+    * @return (vocabulare, dictionary)
+    */
+  def buildVocab(rdd: RDD[String], minCount: Int = 5, maxVocab: Int = 4096 * 64, shardSize: Int = 4096)
+  : (Map[String, Int], Seq[(String, Int)]) = {
     val hist = SparkPrep.buildHistogram(rdd)
     val dict = SparkPrep.dictFromHist(hist, minCount, maxVocab, shardSize)
-    dict
+    val vocab = SparkPrep.vocabFromDict(dict)
+    (vocab, dict)
   }
+
+
 
 }
 
@@ -66,18 +100,19 @@ object SparkPrepDriver {
     val sparkMaster = Properties.envOrElse("MASTER", "local[*]")
     val (sc, spark) = getContext(sparkMaster)
 
-    //create id->word, and word->id dicts
-    val dict = SparkPrep.buildDict(sc.textFile(input))
+    //create word->id map
+    val (wordToId, dict) = SparkPrep.buildVocab(sc.textFile(input))
 
-    dict.foreach { case (word, freq) =>
-      println(s"$word $freq")
+    sc.broadcast(wordToId)
+
+    dict.foreach { case (word, _) =>
+      println(s"$word")
     }
 
     //Optimisations
     // 4b pointers: -XX:+UseCompressedOops if <32Gb RAM
     // tune DataStructures: http://fastutil.di.unimi.it
 
-    // broadcast id->word, and word->id dicts
 
     //Build sharded co-ocurance matrix
     // for each token => ( ( row,                col,                   val), (row, col, val), ...)
