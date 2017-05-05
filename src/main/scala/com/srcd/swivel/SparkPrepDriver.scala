@@ -3,7 +3,9 @@ package com.srcd.swivel
 import org.apache.spark.rdd.RDD
 import org.apache.spark.SparkContext
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.broadcast.Broadcast
 
+import scala.collection.mutable
 import scala.util.Properties
 
 
@@ -13,11 +15,16 @@ import scala.util.Properties
   * Is equivalent to prep.py (and fastprep) from
   * https://github.com/tensorflow/models/tree/master/swivel#preparing-the-data-for-training
   */
+class SparkPrep {
+  type Coocuarances = mutable.HashMap[(Int, Int), Float]
+}
+
 object SparkPrep {
 
-  val _minCount = 5
-  val _maxVocab = 4096 * 64
-  val _shardSize = 4096
+  val defulatMinCount = 5
+  val defaultMaxVocab = 4096 * 64
+  val defaultShardSize = 4096
+  val defaultWindowSize = 10
 
   /*
    * Histogram:  word -> freq
@@ -34,11 +41,12 @@ object SparkPrep {
   }
 
   def dictFromHist(
-      hist: Seq[(String, Int)],
-      minCount: Int = _minCount,
-      maxVocab: Int = _maxVocab,
-      shardSize: Int = _shardSize
+                    hist: Seq[(String, Int)],
+                    minCount: Int = defulatMinCount,
+                    maxVocab: Int = defaultMaxVocab,
+                    shardSize: Int = defaultShardSize
   ): Seq[(String, Int)] = {
+
     var numWords = Math.min(hist.length, maxVocab)
     if (numWords % shardSize != 0) {
       numWords -= numWords % shardSize
@@ -75,9 +83,63 @@ object SparkPrep {
     (vocab, dict)
   }
 
+  /**
+    * Converts array of tokens to Ids
+    *
+    * @param rdd
+    * @param wordToIdVar
+    * @return
+    */
+  def wordsToIds(rdd: RDD[Array[String]], wordToIdVar: Broadcast[Map[String, Int]]) = {
+    rdd.map(line => {
+        line flatMap { // flat is important, skips OOV
+          wordToIdVar.value.get(_)
+        }
+      })
+  }
 
+  /**
+    * Transforms to Id each token, and list elements of co-ocurence matrix.
+    * Each matrix element (i,j) can be listed multiple times.
+    *
+    * @param rdd
+    * @param windowSize
+    * @param vocab
+    * @return
+    */
+  def buildCoocuranceMatrix(rdd: RDD[Array[String]], windowSize: Int, vocab: Broadcast[Map[String, Int]]): RDD[((Int, Int), Double)] = {
+    val ids = wordsToIds(rdd, vocab)
+    val coocs = ids.flatMap(wIds => {
+      generateCoocurance(wIds, windowSize)
+    })
+    coocs
+  }
+
+  def generateCoocurance(ids: Array[Int], windowSize: Int) = {
+    val coocs = mutable.HashMap[(Int, Int), Double]().withDefaultValue(0)
+      0 until ids.size foreach { pos =>
+        val lid = ids(pos)
+        val windowExtent = Math.min(windowSize + 1, ids.size - pos)
+        1 until windowExtent foreach { off =>
+          val rid = ids(pos + off)
+          val count = 1.0 / off
+          val pair = (Math.min(lid, rid), Math.max(lid, rid))
+          coocs(pair) += count
+          //sums[lid] += count
+          //sums[rid] += count
+        }
+        //sums[lid] += 1.0
+        val pair = (lid, lid)
+        coocs(pair) += 0.5  // Only add 1/2 since we output (a, b) and (b, a)
+      }
+      //TODO(bzz): output summs as well as coocs
+      coocs.map { case ((lid, rid), count) =>
+        ((lid, rid), count)
+      }
+  }
 
 }
+
 
 object SparkPrepDriver {
 
@@ -96,6 +158,7 @@ object SparkPrepDriver {
     //  --max_vocab <int>
     //  --vocab <filename>
     //  --window_size <int>
+    val windowSize = SparkPrep.defaultWindowSize
 
     val sparkMaster = Properties.envOrElse("MASTER", "local[*]")
     val (sc, spark) = getContext(sparkMaster)
@@ -103,8 +166,9 @@ object SparkPrepDriver {
     //create word->id map
     val (wordToId, dict) = SparkPrep.buildVocab(sc.textFile(input))
 
-    sc.broadcast(wordToId)
+    val wordToIdVar = sc.broadcast(wordToId)
 
+    // write the vocab to {row, col}_vocab.txt
     dict.foreach { case (word, _) =>
       println(s"$word")
     }
@@ -113,15 +177,23 @@ object SparkPrepDriver {
     // 4b pointers: -XX:+UseCompressedOops if <32Gb RAM
     // tune DataStructures: http://fastutil.di.unimi.it
 
-
     //Build sharded co-ocurance matrix
-    // for each token => ( ( row,                col,                   val), (row, col, val), ...)
+    val coocs = SparkPrep.buildCoocuranceMatrix(
+      sc.textFile(input).map(_.split("\t")),
+      windowSize,
+      wordToIdVar
+    )
+
     //                => ( ((row%i, row mod i), (col%i, col mod i),     val))
     //                => ( row%i "+" col%j,     (row mod i, col mod i, val) )
     //
     //push sort to shuffle
-    // repartitionAndSortWithinPartitions(...)
+    // .repartitionAndSortWithinPartitions(...)
     // make sure it's partition by row%i,col%j
+
+    //TODO(bzz): output `{row, col}_sums.txt`
+
+    //TODO(bzz): Outup *.pb per partion using https://github.com/tensorflow/ecosystem/tree/master/spark/spark-tensorflow-connector
 
   }
 
