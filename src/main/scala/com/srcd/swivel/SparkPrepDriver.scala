@@ -4,6 +4,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.SparkContext
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.broadcast.Broadcast
+import org.apache.spark.Partitioner
 
 import scala.collection.mutable
 import scala.util.Properties
@@ -138,7 +139,48 @@ object SparkPrep {
       }
   }
 
+  /**
+    * For given co-ocurance matrix, shards it to <bold>numShards^2</bold> pices
+    *
+    * @param coocs
+    * @param numShards number of shards along the dimention
+    * @returnw
+    */
+  def doShardMatrix(coocs: RDD[((Int, Int), Double)], numShards: Int): RDD[((Int, Int), Double)] = {
+    val shardedCoocs = coocs
+      .repartitionAndSortWithinPartitions(new ShardPartitioner(numShards))
+      .reduceByKey(_+_)
+
+      //.map { case ((i, j), weight) =>
+      //  ( (i%numShards, j%numShards), (i/numShards, j/numShards, weight) )
+      //}
+    shardedCoocs
+  }
+
 }
+
+/**
+  * Number of partitions is ^2 number of shards
+  * @param numShards number of shards (per dimention)
+  */
+class ShardPartitioner(numShards: Int) extends org.apache.spark.Partitioner {
+  require(numShards >= 0, s"Number of partitions ($numShards) cannot be negative.")
+
+  def numPartitions: Int = numShards * numShards
+
+  def getPartition(key: Any): Int = key match {
+    case null => 0
+    case (i, j) => (i.asInstanceOf[Int]%numShards) * numShards + j.asInstanceOf[Int]%numShards
+  }
+
+  override def equals(other: Any): Boolean = other match {
+    case o: ShardPartitioner => o.numPartitions == numPartitions
+    case _ => false
+  }
+
+  override def hashCode: Int = numPartitions
+}
+
 
 
 object SparkPrepDriver {
@@ -154,6 +196,7 @@ object SparkPrepDriver {
     val input = args(0)
     //  --output_dir <directory>
     //  --shard_size <int>
+    val shardSize = SparkPrep.defaultWindowSize
     //  --min_count <int>
     //  --max_vocab <int>
     //  --vocab <filename>
@@ -172,29 +215,25 @@ object SparkPrepDriver {
     dict.foreach { case (word, _) =>
       println(s"$word")
     }
+    val numShards = dict.size / shardSize
 
     //Optimisations
     // 4b pointers: -XX:+UseCompressedOops if <32Gb RAM
     // tune DataStructures: http://fastutil.di.unimi.it
+    // convert to IDs and persist (measure size/throughtput)
 
-    //Build sharded co-ocurance matrix
-    val coocs = SparkPrep.buildCoocuranceMatrix(
+    //Builds co-ocurance matrix
+    val coocs = SparkPrep.buildCoocuranceMatrix( // RDD[ ((i, j), weight) ]
       sc.textFile(input).map(_.split("\t")),
       windowSize,
       wordToIdVar
     )
 
-    //                => ( ((row%i, row mod i), (col%i, col mod i),     val))
-    //                => ( row%i "+" col%j,     (row mod i, col mod i, val) )
-    //
-    //push sort to shuffle
-    // .repartitionAndSortWithinPartitions(...)
-    // make sure it's partition by row%i,col%j
+    val shardedCoocs = SparkPrep.doShardMatrix(coocs, numShards)
 
     //TODO(bzz): output `{row, col}_sums.txt`
 
     //TODO(bzz): Outup *.pb per partion using https://github.com/tensorflow/ecosystem/tree/master/spark/spark-tensorflow-connector
-
   }
 
 

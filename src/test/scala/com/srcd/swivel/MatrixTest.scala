@@ -14,6 +14,18 @@ class MatrixTest extends FunSuite with SharedSparkContext {
 
   private val id = Map("a" -> 1, "b" -> 2, "c" -> 3, "d" -> 4, "e" -> 5)
   private var wordToIdVar: Broadcast[Map[String, Int]] = _
+  private val coocsFor3lines = Seq(
+      ((id("a"), id("a")), 1.5),
+      ((id("a"), id("b")), 3.0),
+      ((id("b"), id("b")), 1.5),
+      ((id("b"), id("c")), 2.0),
+      ((id("c"), id("c")), 1.0),
+      ((id("b"), id("d")), 0.5),
+      ((id("a"), id("c")), 1.0),
+      ((id("c"), id("d")), 1.0),
+      ((id("a"), id("d")), 0.3333333333333333),
+      ((id("d"), id("d")), 0.5)
+    )
 
   override def conf = { //https://issues.apache.org/jira/browse/SPARK-19394
     super.conf.set("spark.driver.host", "localhost")
@@ -76,19 +88,6 @@ class MatrixTest extends FunSuite with SharedSparkContext {
   }
 
   test("Coocs: 3 line of ids to coocurences") {
-    val expectedCoocs = Seq(
-      ((id("a"), id("a")), 1.5),
-      ((id("a"), id("b")), 3.0),
-      ((id("b"), id("b")), 1.5),
-      ((id("b"), id("c")), 2.0),
-      ((id("c"), id("c")), 1.0),
-      ((id("b"), id("d")), 0.5),
-      ((id("a"), id("c")), 1.0),
-      ((id("c"), id("d")), 1.0),
-      ((id("a"), id("d")), 0.3333333333333333),
-      ((id("d"), id("d")), 0.5)
-    ).toSet
-
     // given
     val wordWindow = 10
 
@@ -103,8 +102,43 @@ class MatrixTest extends FunSuite with SharedSparkContext {
       .groupBy(_._1).mapValues(_.map(_._2).sum) // for tests only, this happens later in pipeline
 
     // then
-    //assert(coocs.size == expectedCoocs.size)
-    coocs.toSet should equal (expectedCoocs)
+    assert(coocs.size == coocsFor3lines.size)
+    coocs.toSet should equal (coocsFor3lines.toSet)
+    //coocs.sortBy {_._1} should equal (coocsFor3lines.sortBy {_._1})
+  }
+
+  test("Sharding: merge coocs + shard") {
+    // given
+    val shardSize = 4
+    val unMergedCoocs = List(
+	    ((1,1),0.5), ((1,1),0.5), ((1,1),0.5),
+	    ((1,2),1.0), ((1,2),1.0), ((1,2),1.0),
+	    ((1,3),0.5), ((1,3),0.5),
+	    ((1,4),0.3333333333333333),
+	    ((2,2),0.5), ((2,2),0.5), ((2,2),0.5),
+	    ((2,3),1.0), ((2,3),1.0),
+	    ((2,4),0.5),
+	    ((3,3),0.5), ((3,3),0.5),
+	    ((3,4),1.0),
+	    ((4,4),0.5)
+    )
+
+    // when
+    val shards = SparkPrep.doShardMatrix(sc.parallelize(unMergedCoocs), shardSize)
+
+    // then
+    assert(shards.getNumPartitions == shardSize*shardSize)
+    shards.collect.toSet should equal (coocsFor3lines.toSet)
+
+    def pprint(rdd: org.apache.spark.rdd.RDD[_]) = rdd.mapPartitionsWithIndex { (i, x) => {
+      println(s"Partition #$i")
+      x.map { element =>
+        println(element)
+      }}
+    }
+
+    //pprint(shards).collect
+    //shards.saveAsTextFile("/tmp/swivel_shards/test-partitionBy/")
   }
 
 

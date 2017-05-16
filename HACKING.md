@@ -17,7 +17,7 @@ Note that the resulting co-occurrence matrix is very sparse (i.e., contains many
       generated vocabulary; default 5.  (Ignored if --vocab is used.)
   --max_vocab <int>
       The maximum vocabulary size to generate from the input corpus; default
-      102,400.  (Ignored if --vocab is used.) 
+      102,400.  (Ignored if --vocab is used.)
       Admit at most n words into the vocabulary.
   --vocab <filename>
       Use the specified unigram vocabulary instead of generating
@@ -99,7 +99,7 @@ Highlevel overview
 # Plan
  - [x] run `prep.py`
  - [x] trace `prep.py` to understand algorithm
- - [x] profile `prep.py`: 
+ - [x] profile `prep.py`:
    * who is slow compute_coocs or write_shards? CPU vs IO?
    * create_vocabulary() / compute_coocs() / write_shards() ?
    compute_coocs is slowest
@@ -107,7 +107,7 @@ Highlevel overview
  - [x] Docker for fastprep
    https://github.com/tensorflow/models/pull/1108#issuecomment-298866790
 
- - write validation script 
+ - write validation script
     * plot `matrix -> shards` heatmap
     * Byte-to-byte test on final .pb shards
 
@@ -118,7 +118,7 @@ Highlevel overview
    * output `{row, col}_vocab.txt` vocabularry
    * build and .brodcast() vocabulary/inverse
  - [x] generate co-occurrences
- - [ ] uniform partitioning for shards `(i mod shard_size, j)`
+ - [ ] shard partitioning  `(i mod shard_size, j)`
  - outup *.pb per partion using
    https://github.com/tensorflow/ecosystem/tree/master/spark/spark-tensorflow-connector
  - output `{row, col}_sums.txt`
@@ -128,7 +128,8 @@ Highlevel overview
  - add CI
  - prepare date for large-scale testing
  - test at scale
- - experiment with DataSet impl
+ - experiment with DataFrame impl
+   https://github.com/sryza/aas/blob/master/ch08-geotime/src/main/scala/com/cloudera/datascience/geotime/RunGeoTime.scala#L83
 
 
 
@@ -175,3 +176,118 @@ i = i_shard*num_shards + i_offset
 
 sort by (i_shard, j_shard)
 ```
+
+--------------------------------
+
+
+scala> val data = sc.parallelize(List((1, 2), (1, 1), (2, 3), (2, 1), (1, 4), (3, 5)), 2)
+data: org.apache.spark.rdd.RDD[(Int, Int)] = ParallelCollectionRDD[0] at parallelize at <console>:24
+
+scala> data.mapPartitions { _.map { println(_) } } collect
+warning: there was one feature warning; re-run with -feature for details
+[Stage 0:>                                                          (0 + 0) / 2]
+(2,1)
+(1,4)
+(3,5)
+(1,2)
+(1,1)
+(2,3)
+res0: Array[Unit] = Array((), (), (), (), (), ())
+
+
+
+val data = sc.parallelize(List((1, 2), (1, 1), (2, 3), (2, 1), (1, 4), (3, 5), (4,1)), 4)
+data.getNumPartitions
+val numShards = 2
+
+def pprint(rdd: org.apache.spark.rdd.RDD[_]) = rdd.mapPartitionsWithIndex { (i, x) => {
+   println(s"Partition #$i")
+   x.map { element =>
+    println(element)
+   }}
+}
+
+
+val rp_data = data.repartitionAndSortWithinPartitions(new org.apache.spark.RangePartitioner(numShards, data))
+val rps_data = data.repartitionAndSortWithinPartitions(new ShardPartitioner1(numShards))
+val pby_data = data.partitionBy(new ShardPartitioner1(numShards))
+rps_data.saveAsTextFile("/tmp/swivel_shards/repartitionAnd")
+pby_data.saveAsTextFile("/tmp/swivel_shards/partitionBy")
+
+
+class ShardPartitioner1(partitions: Int) extends org.apache.spark.Partitioner {
+  require(partitions >= 0, s"Number of partitions ($partitions) cannot be negative.")
+
+  def numPartitions: Int = partitions
+  def getPartition(key: Any): Int = {
+    val part = key.asInstanceOf[Int] % numPartitions
+    println(s"Key: $key, partition: $part")
+    part
+  }
+
+  override def equals(other: Any): Boolean = other match {
+    case o: ShardPartitioner1 => o.numPartitions == numPartitions
+    case _ =>  false
+  }
+  override def hashCode: Int = numPartitions.hashCode
+}
+
+val numShards = 2
+val shards = for {
+  i <- 0 to 2
+  j <- 0 to 2
+} yield ( (i%numShards, j%numShards), (i/numShards, j/numShards, 0.1) )
+
+val data2 = sc.parallelize(shards, 2)
+
+//(!!!)
+//numPartition = numShards*numShards
+val p_data2 = data2.repartitionAndSortWithinPartitions(new ShardPartitioner(numShards))
+p_data2.saveAsTextFile("/tmp/swivel_shards/repartitionAnd2")
+
+
+val pby_data2 = data2.partitionBy(new ShardPartitioner(numShards))
+pby_data2.saveAsTextFile("/tmp/swivel_shards/partitionBy2")
+
+
+  class ShardPartitioner(numShards: Int) extends  org.apache.spark.Partitioner {
+    require(numShards >= 0, s"Number of partitions ($numShards) cannot be negative.")
+
+    def numPartitions: Int = numShards*numShards
+    def getPartition(key: Any): Int = key match {
+      case null => 0
+      case (i, j) => i.asInstanceOf[Int]*numShards + j.asInstanceOf[Int]
+    }
+
+    override def equals(other: Any): Boolean = other match {
+      case o: ShardPartitioner => o.numPartitions == numPartitions
+      case _ =>  false
+    }
+    override def hashCode: Int = numPartitions
+  }
+
+    def getPartition(key: Any): Int = key match {
+      case null => 0
+      case (i, j) => i.asInstanceOf[Int]*numShards + j.asInstanceOf[Int]
+    }
+
+shards.map { case (k, v) => println(s"$k -> " + getPartition(k)) }
+data.mapPartitions { _.map { println(_) } } collect
+
+-------------------------------------------------
+
+    val unMergedCoocs = List(
+	    ((1,1),0.5), ((1,1),0.5), ((1,1),0.5),
+	    ((1,2),1.0), ((1,2),1.0), ((1,2),1.0),
+	    ((1,3),0.5), ((1,3),0.5),
+	    ((1,4),0.3333333333333333),
+	    ((2,2),0.5), ((2,2),0.5), ((2,2),0.5),
+	    ((2,3),1.0), ((2,3),1.0),
+	    ((2,4),0.5),
+	    ((3,3),0.5), ((3,3),0.5),
+	    ((3,4),1.0),
+	    ((4,4),0.5)
+    )
+
+val data  = sc.parallelize(unMergedCoocs, 2)
+
