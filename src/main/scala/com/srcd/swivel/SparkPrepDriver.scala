@@ -58,7 +58,7 @@ object SparkPrep {
 
   def vocabFromDict(dict: Seq[(String, Int)]): Map[String, Int] = {
     val vocab = dict.view
-      .zip(Stream from 1)
+      .zipWithIndex
       .map { case ((word, _), id) =>
         (word, id)
       }
@@ -147,14 +147,17 @@ object SparkPrep {
     * @param numShards number of shards along the dimention
     * @returnw
     */
-  def doShardMatrix(coocs: RDD[((Int, Int), Double)], numShards: Int): RDD[((Int, Int), Double)] = {
+  def doShardMatrix(coocs: RDD[((Int, Int), Double)], numShards: Int): RDD[((Int, Int), (Int, Int, Double))] = {
     val shardedCoocs = coocs
+      //.reduceByKey(new ShardPartitioner(numShards), _+_)
       .repartitionAndSortWithinPartitions(new ShardPartitioner(numShards))
-      .reduceByKey(_+_)
-
       //.map { case ((i, j), weight) =>
-      //  ( (i%numShards, j%numShards), (i/numShards, j/numShards, weight) )
+      //    ((i/numShards, j/numShards), weight)
       //}
+      //.mapPartitions { _.toArray.groupBy(_._1).mapValues(_.map(_._2).sum).toIterator }
+      .map { case ((i, j), weight) =>
+        ( (i%numShards, j%numShards), (i/numShards, j/numShards, weight) )
+      }
     shardedCoocs
   }
 

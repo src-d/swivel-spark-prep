@@ -82,9 +82,9 @@ class DictionaryTest extends FunSuite with SharedSparkContext {
     // then
     assert(vocab.size === dict.size)
     assert(vocab contains "a")
-    assert(vocab("a") == 1)
+    assert(vocab("a") == 0)
     assert(vocab contains "b")
-    assert(vocab("b") == 2)
+    assert(vocab("b") == 1)
   }
 
   test("build vocabulary: full word -> id") {
@@ -96,7 +96,7 @@ class DictionaryTest extends FunSuite with SharedSparkContext {
 
     // then
     assert(words.size == 3)
-    assert(words("a") === 1)
+    assert(words("a") === 0)
   }
 
 
