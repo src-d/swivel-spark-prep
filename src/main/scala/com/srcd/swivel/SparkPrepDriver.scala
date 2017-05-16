@@ -48,13 +48,12 @@ object SparkPrep {
     hist: Seq[(String, Int)], minCount: Int = defaultMinCount, maxVocab: Int = defaultMaxVocab, shardSize: Int = defaultShardSize
   ): Seq[(String, Int)] = {
 
-    var numWords = Math.min(hist.length, maxVocab)
+    val freqFiltered = hist.filter(_._2 >= minCount)
+    var numWords = Math.min(freqFiltered.length, maxVocab)
     if (numWords % shardSize != 0) {
       numWords -= numWords % shardSize
     }
-    hist
-      .filter(_._2 >= minCount)
-      .take(numWords)
+    freqFiltered.take(numWords)
   }
 
   def vocabFromDict(dict: Seq[(String, Int)]): Map[String, Int] = {
@@ -74,7 +73,7 @@ object SparkPrep {
     * @param minCount
     * @param maxVocab
     * @param shardSize
-    * @return (vocabulare, dictionary)
+    * @return (vocabulary, dictionary): both are word -> id mappings, dictionary is orderd by freq
     */
   def buildVocab(
     rdd: RDD[String], minCount: Int = defaultMinCount, maxVocab: Int = defaultMaxVocab, shardSize: Int = defaultShardSize
@@ -223,7 +222,7 @@ object SparkPrepDriver {
 
     val wordToIdVar = sc.broadcast(wordToId)
 
-    // write the vocab to {row, col}_vocab.txt
+    // TODO(bzz): write the sorted vocab to {row, col}_vocab.txt
     dict.foreach { case (word, _) =>
       println(s"$word")
     }
