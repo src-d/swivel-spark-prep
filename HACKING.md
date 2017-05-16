@@ -1,4 +1,6 @@
-# Highlevel descriotion
+# Highlevel description
+
+from https://github.com/tensorflow/models/tree/master/swivel#swivel-in-tensorflow
 
 Compute the co-occurrence statistics from a corpus; that is, determine how often a word c appears the context (e.g., "within ten words") of a focus word f. This results in a sparse co-occurrence matrix whose rows represent the focus words, and whose columns represent the context words. Each cell value is the number of times the focus and context words were observed together.
 
