@@ -60,6 +60,7 @@ ext {
 
 dependencies {
     compile "org.scala-lang:scala-library:$scalaVersion.4"
+    compile "org.rogach:scallop_$scalaVersion:2.1.2"
 
     //spark
     provided 'org.apache.hadoop:hadoop-client:2.0.0-mr1-cdh4.6.0' //TODO(bzz): HDFS version

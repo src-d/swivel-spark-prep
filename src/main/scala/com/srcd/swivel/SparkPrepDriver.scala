@@ -9,6 +9,8 @@ import org.apache.spark.Partitioner
 import scala.collection.mutable
 import scala.util.Properties
 
+import org.rogach.scallop._
+
 
 /**
   * Distributed data pre-processing for Swivel algorithm https://arxiv.org/abs/1602.02215
@@ -22,10 +24,11 @@ class SparkPrep {
 
 object SparkPrep {
 
-  val defulatMinCount = 5
+  val defaultMinCount = 5
   val defaultMaxVocab = 4096 * 64
   val defaultShardSize = 4096
   val defaultWindowSize = 10
+  val defaultOutputDir = "/tmp/swivel-spark"
 
   /*
    * Histogram:  word -> freq
@@ -42,10 +45,7 @@ object SparkPrep {
   }
 
   def dictFromHist(
-                    hist: Seq[(String, Int)],
-                    minCount: Int = defulatMinCount,
-                    maxVocab: Int = defaultMaxVocab,
-                    shardSize: Int = defaultShardSize
+    hist: Seq[(String, Int)], minCount: Int = defaultMinCount, maxVocab: Int = defaultMaxVocab, shardSize: Int = defaultShardSize
   ): Seq[(String, Int)] = {
 
     var numWords = Math.min(hist.length, maxVocab)
@@ -76,8 +76,10 @@ object SparkPrep {
     * @param shardSize
     * @return (vocabulare, dictionary)
     */
-  def buildVocab(rdd: RDD[String], minCount: Int = 5, maxVocab: Int = 4096 * 64, shardSize: Int = 4096)
-  : (Map[String, Int], Seq[(String, Int)]) = {
+  def buildVocab(
+    rdd: RDD[String], minCount: Int = defaultMinCount, maxVocab: Int = defaultMaxVocab, shardSize: Int = defaultShardSize
+  ): (Map[String, Int], Seq[(String, Int)]) = {
+
     val hist = SparkPrep.buildHistogram(rdd)
     val dict = SparkPrep.dictFromHist(hist, minCount, maxVocab, shardSize)
     val vocab = SparkPrep.vocabFromDict(dict)
@@ -183,31 +185,41 @@ class ShardPartitioner(numShards: Int) extends org.apache.spark.Partitioner {
 
 
 
+class Cli(arguments: Seq[String]) extends ScallopConf(arguments) {
+  version("swivel-spark-prep 0.1.0 2017 by Source{d}")
+  banner("""Usage: swivel-spark-prep [OPTION]...
+           |Swivel-spark-prep parallelize data pre-processing for Swivel ML model
+           |Options:
+           |""".stripMargin)
+  footer("\nFor the details , consult https://github.com/tensorflow/models/tree/master/swivel#preparing-the-data-for-training")
+
+  val input = opt[String](required = true)
+  val output_dir = opt[String](default = Some(SparkPrep.defaultOutputDir))
+  val shard_size = opt[Int](default = Some(SparkPrep.defaultShardSize))
+  val min_count = opt[Int](default = Some(SparkPrep.defaultMinCount))
+  val max_vocab = opt[Int](default = Some(SparkPrep.defaultMaxVocab))
+  val window_size = opt[Int](default = Some(SparkPrep.defaultWindowSize))
+  verify()
+}
+
+
 object SparkPrepDriver {
 
   def main(args: Array[String]): Unit = {
+    val cli = new Cli(args)
     if (args.length < 1) {
-      System.err.println("Usage: " + this.getClass.getSimpleName +" <inputFile>")
+      cli.printHelp()
       System.exit(1)
     }
-
-    //TODO(bzz): CLI args
-    //  --input <filename>
-    val input = args(0)
-    //  --output_dir <directory>
-    //  --shard_size <int>
-    val shardSize = SparkPrep.defaultWindowSize
-    //  --min_count <int>
-    //  --max_vocab <int>
-    //  --vocab <filename>
-    //  --window_size <int>
-    val windowSize = SparkPrep.defaultWindowSize
 
     val sparkMaster = Properties.envOrElse("MASTER", "local[*]")
     val (sc, spark) = getContext(sparkMaster)
 
     //create word->id map
-    val (wordToId, dict) = SparkPrep.buildVocab(sc.textFile(input))
+    val (wordToId, dict) = SparkPrep.buildVocab(
+      sc.textFile(cli.input()),
+      cli.min_count(), cli.max_vocab(), cli.shard_size()
+    )
 
     val wordToIdVar = sc.broadcast(wordToId)
 
@@ -215,7 +227,7 @@ object SparkPrepDriver {
     dict.foreach { case (word, _) =>
       println(s"$word")
     }
-    val numShards = dict.size / shardSize
+    val numShards = dict.size / cli.shard_size()
 
     //Optimisations
     // 4b pointers: -XX:+UseCompressedOops if <32Gb RAM
@@ -224,16 +236,17 @@ object SparkPrepDriver {
 
     //Builds co-ocurance matrix
     val coocs = SparkPrep.buildCoocuranceMatrix( // RDD[ ((i, j), weight) ]
-      sc.textFile(input).map(_.split("\t")),
-      windowSize,
+      sc.textFile(cli.input()).map(_.split("\t")),
+      cli.window_size(),
       wordToIdVar
     )
 
     val shardedCoocs = SparkPrep.doShardMatrix(coocs, numShards)
-
-    //TODO(bzz): output `{row, col}_sums.txt`
+    shardedCoocs.saveAsTextFile(cli.output_dir())
 
     //TODO(bzz): Outup *.pb per partion using https://github.com/tensorflow/ecosystem/tree/master/spark/spark-tensorflow-connector
+
+    //TODO(bzz): output `{row, col}_sums.txt`
   }
 
 
