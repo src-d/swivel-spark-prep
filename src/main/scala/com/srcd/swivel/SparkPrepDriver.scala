@@ -1,15 +1,13 @@
 package com.srcd.swivel
 
-import org.apache.spark.rdd.RDD
 import org.apache.spark.SparkContext
-import org.apache.spark.sql.SparkSession
 import org.apache.spark.broadcast.Broadcast
-import org.apache.spark.Partitioner
+import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.SparkSession
+import org.rogach.scallop._
 
 import scala.collection.mutable
 import scala.util.Properties
-
-import org.rogach.scallop._
 
 
 /**
@@ -109,12 +107,23 @@ object SparkPrep {
     * @param vocab
     * @return
     */
-  def buildCoocuranceMatrix(rdd: RDD[Array[String]], windowSize: Int, vocab: Broadcast[Map[String, Int]]): RDD[((Int, Int), Double)] = {
+  def buildCoocuranceMatrix(
+    rdd: RDD[Array[String]],
+    windowSize: Int,
+    numShards: Int,
+    vocab: Broadcast[Map[String, Int]]
+  ): RDD[((Int, Int), Double)] = {
+
     val ids = wordsToIds(rdd, vocab)
-    val coocs = ids.flatMap(wIds => {
-      generateCoocurance(wIds, windowSize)
-    })
-    coocs
+    val coocs = ids.flatMap(generateCoocurance(_, windowSize))
+    val sharded = mergeCoocsAndShard(coocs, numShards)
+
+    sharded.map { case ((i, j), w) =>
+      ( (i/numShards, j/numShards), w)
+    }
+    //.map { case ((i, j), w) =>
+    //  ( (i%numShards, j%numShards), (i/numShards, j/numShards, w) )
+    //}
   }
 
   def generateCoocurance(ids: Array[Int], windowSize: Int) = {
@@ -127,17 +136,16 @@ object SparkPrep {
           val count = 1.0 / off
           val pair = (Math.min(lid, rid), Math.max(lid, rid))
           coocs(pair) += count
+          coocs(pair.swap) += count
           //sums[lid] += count
           //sums[rid] += count
         }
         //sums[lid] += 1.0
         val pair = (lid, lid)
-        coocs(pair) += 0.5  // Only add 1/2 since we output (a, b) and (b, a)
+        coocs(pair) += 1.0  // Add 1 (not 1/2 as before) since we do output (a, b) and (b, a) separatly
       }
       //TODO(bzz): output summs as well as coocs
-      coocs.map { case ((lid, rid), count) =>
-        ((lid, rid), count)
-      }
+      coocs
   }
 
   /**
@@ -145,26 +153,36 @@ object SparkPrep {
     *
     * @param coocs
     * @param numShards number of shards along the dimention
-    * @returnw
+    * @return
     */
-  def doShardMatrix(coocs: RDD[((Int, Int), Double)], numShards: Int): RDD[((Int, Int), (Int, Int, Double))] = {
+  def mergeCoocsAndShard(coocs: RDD[((Int, Int), Double)], numShards: Int): RDD[((Int, Int), Double)] = {
+    //TODO(bzz): if time permits, compare performance of 3 possible impls below
     val shardedCoocs = coocs
-      //.reduceByKey(new ShardPartitioner(numShards), _+_)
-      .repartitionAndSortWithinPartitions(new ShardPartitioner(numShards))
-      //.map { case ((i, j), weight) =>
-      //    ((i/numShards, j/numShards), weight)
+      //I. repartitionAndSort + smart manual reduce over .mapPartition(), takeing advantage of key order
+      //  .repartitionAndSortWithinPartitions(new ShardPartitioner(numShards))
+      //  .mapPartitions { iter =>
+      //    for (x <- iter) {
+      //  }
       //}
+
+      //II.
+      .reduceByKey(new ShardPartitioner(numShards), _+_)
+      .mapPartitions(_.toSeq.sortBy(_._1).toIterator)
+      // or
+      //.repartitionAndSortWithinPartitions(new ShardPartitioner(numShards))
+
+      //III. partition + dumb manual 'reduce' over .mapPartitons()
+      //.partitionBy(new ShardPartitioner(numShards))
       //.mapPartitions { _.toArray.groupBy(_._1).mapValues(_.map(_._2).sum).toIterator }
-      .map { case ((i, j), weight) =>
-        ( (i%numShards, j%numShards), (i/numShards, j/numShards, weight) )
-      }
+      //  or same, through (more performant?)
+      //.mapPartitions(reducePartition) from PairRDDFunctions.reduceByKeyLocally()
     shardedCoocs
   }
 
 }
 
 /**
-  * Number of partitions is ^2 number of shards
+  * Number of partitions is square the number of shards
   * @param numShards number of shards (per dimention)
   */
 class ShardPartitioner(numShards: Int) extends org.apache.spark.Partitioner {
@@ -217,37 +235,52 @@ object SparkPrepDriver {
     val sparkMaster = Properties.envOrElse("MASTER", "local[*]")
     val (sc, spark) = getContext(sparkMaster)
 
+    val input = sc.textFile(cli.input())
+
     //create word->id map
-    val (wordToId, dict) = SparkPrep.buildVocab(
-      sc.textFile(cli.input()),
-      cli.min_count(), cli.max_vocab(), cli.shard_size()
-    )
+    val (wordToId, dict) = SparkPrep.buildVocab(input, cli.min_count(), cli.max_vocab(), cli.shard_size())
 
     val wordToIdVar = sc.broadcast(wordToId)
-
-    // TODO(bzz): write the sorted vocab to {row, col}_vocab.txt
-    dict.foreach { case (word, _) =>
-      println(s"$word")
-    }
     val numShards = dict.size / cli.shard_size()
 
-    //Optimisations
-    // 4b pointers: -XX:+UseCompressedOops if <32Gb RAM
-    // tune DataStructures: http://fastutil.di.unimi.it
-    // convert to IDs and persist (measure size/throughtput)
+    // Optimisations:
+    //  4b pointers -XX:+UseCompressedOops if <32Gb RAM
+    //  tune DataStructures: http://fastutil.di.unimi.it
+    //  convert to IDs and persist (measure size/throughtput)
 
-    //Builds co-ocurance matrix
-    val coocs = SparkPrep.buildCoocuranceMatrix( // RDD[ ((i, j), weight) ]
-      sc.textFile(cli.input()).map(_.split("\t")),
-      cli.window_size(),
+    //Builds co-ocurance matrix: RDD[ ((i, j), weight)
+    val shardedCoocs = SparkPrep.buildCoocuranceMatrix(
+      input.map(_.split("\t")),
+      cli.window_size(), numShards,
       wordToIdVar
     )
 
-    val shardedCoocs = SparkPrep.doShardMatrix(coocs, numShards)
+    /* debug output: single shard
+    val windowSize = cli.window_size()
+    val coocs = SparkPrep
+      .wordsToIds(input.map(_.split("\t")), wordToIdVar)
+      .flatMap(SparkPrep.generateCoocurance(_, windowSize))
+
+    val shardedCoocs = coocs
+      .reduceByKeyLocally(_+_)
+      .toSeq.sortBy(_._1)
+      .foreach { case ((i, j), w) =>
+          println(s"$i $j $w")
+      }
+    */
+
     shardedCoocs.saveAsTextFile(cli.output_dir())
 
-    //TODO(bzz): Outup *.pb per partion using https://github.com/tensorflow/ecosystem/tree/master/spark/spark-tensorflow-connector
+    // TODO(bzz): write the sorted vocab to {row, col}_vocab.txt
+    new java.io.PrintWriter(cli.output_dir() + "/dict_debug.txt") {
+      try {
+        dict.foreach { case (word, freq) =>
+          write(s"$word $freq\n")
+        }
+      } finally {close}
+    }
 
+    //TODO(bzz): Outup *.pb per partion using https://github.com/tensorflow/ecosystem/tree/master/spark/spark-tensorflow-connector
     //TODO(bzz): output `{row, col}_sums.txt`
   }
 
@@ -261,8 +294,6 @@ object SparkPrepDriver {
       .master(sparkMaster)
       //.config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
       .getOrCreate()
-
-    import spark.implicits._
     (spark.sparkContext, spark)
   }
 

@@ -291,5 +291,11 @@ data.mapPartitions { _.map { println(_) } } collect
 	    ((4,4),0.5)
     )
 
-val data  = sc.parallelize(unMergedCoocs, 2)
+val numShards = 2
+val data  = sc.parallelize(unMergedCoocs, 3)
+val p_data = data.repartitionAndSortWithinPartitions(new ShardPartitioner(numShards))
+
+val merged = p_data.mapPartitions {
+   _.toArray.groupBy(_._1).mapValues(_.map(_._2).sum).toIterator
+}
 

@@ -1,27 +1,12 @@
-package com.srcd.swivel
+package com.srcd.swivel.small
 
+import com.srcd.swivel.SparkPrep
 import org.junit.runner.RunWith
 import org.scalatest.FunSuite
 import org.scalatest.junit.JUnitRunner
-import com.holdenkarau.spark.testing.SharedSparkContext
-import org.apache.spark.rdd.RDD
-
 
 @RunWith(classOf[JUnitRunner]) //TODO(bzz): research https://plugins.gradle.org/plugin/com.github.maiflai.scalatesta
-class DictionaryTest extends FunSuite with SharedSparkContext {
-
-  test("build histogram") {
-    // given
-    val tokenLine = Array("d\ta\tb\tc\ta", "b\tc\ta")
-
-    // when
-    val words = SparkPrep.buildHistogram(sc.parallelize(tokenLine))
-
-
-    // then
-    assert(words.length == 4)
-    assert(words(0) === ("a", 3))
-  }
+class DictionarySmallTest extends FunSuite {
 
   test("build dictionary: filters minCount") {
     val expected = Array(("a", 4), ("b", 3))
@@ -86,18 +71,5 @@ class DictionaryTest extends FunSuite with SharedSparkContext {
     assert(vocab contains "b")
     assert(vocab("b") == 1)
   }
-
-  test("build vocabulary: full word -> id") {
-    // given
-    val tokenLine = Array("d\ta\tb\tc\ta", "b\tc\ta")
-
-    // when
-    val (words, _) = SparkPrep.buildVocab(sc.parallelize(tokenLine), 2, 100, 3)
-
-    // then
-    assert(words.size == 3)
-    assert(words("a") === 0)
-  }
-
 
 }
