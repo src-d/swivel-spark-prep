@@ -21,10 +21,6 @@ import scala.util.Properties
   * Is equivalent to prep.py (and fastprep) from
   * https://github.com/tensorflow/models/tree/master/swivel#preparing-the-data-for-training
   */
-class SparkPrep {
-  type Coocuarances = mutable.HashMap[(Int, Int), Float]
-}
-
 object SparkPrep {
 
   val defaultMinCount = 5
@@ -35,7 +31,7 @@ object SparkPrep {
 
   /*
    * Histogram:  word -> freq
-   * Dictionary: id -> (word, freq) _ordered_ seq of word freq tupes
+   * Dictionary: id -> (word, freq) _ordered_ seq of word freq tuples
    * Vocabulary: word -> id _un-ordered_ Map
    */
 
@@ -97,22 +93,47 @@ object SparkPrep {
     */
   def wordsToIds(rdd: RDD[Array[String]], wordToIdVar: Broadcast[Map[String, Int]]) = {
     rdd.map(line => {
-        line flatMap { // flat is important, skips OOV
+        line.flatMap { // flat is important, skips OOV
           wordToIdVar.value.get(_)
         }
       })
   }
 
+
+  /**
+    * Used for debug output
+    */
+  def buildCooccurrenceMatrixInSingleShard(
+    rdd: RDD[Array[String]],
+    windowSize: Int,
+    numShards: Int,
+    vocab: Broadcast[Map[String, Int]]
+  ) = {
+    val coocs = SparkPrep
+      .wordsToIds(rdd, vocab)
+      .flatMap(generateCooccurrence(_, windowSize))
+
+    val shardedCoocs = coocs
+      .reduceByKeyLocally(_+_)
+      .toSeq.sortBy(_._1)
+      .foreach { case ((i, j), w) =>
+          println(s"$i $j $w")
+      }
+    shardedCoocs
+  }
+
+
   /**
     * Transforms to Id each token, and list elements of co-ocurence matrix.
     * Each matrix element (i,j) can be listed multiple times.
     *
-    * @param rdd
-    * @param windowSize
-    * @param vocab
-    * @return
+    * @param rdd Tokenized lines of input
+    * @param windowSize size of co-occurrence window
+    * @param numShards numer of shards
+    * @param vocab word -> id
+    * @return co-occurrence matrix as ((i, j), weight)
     */
-  def buildCoocuranceMatrix(
+  def buildCooccurrenceMatrix(
     rdd: RDD[Array[String]],
     windowSize: Int,
     numShards: Int,
@@ -120,20 +141,16 @@ object SparkPrep {
   ): RDD[((Int, Int), Double)] = {
 
     val ids = wordsToIds(rdd, vocab)
-    val coocs = ids.flatMap(generateCoocurance(_, windowSize))
+    val coocs = ids.flatMap(generateCooccurrence(_, windowSize))
     val sharded = mergeCoocsAndShard(coocs, numShards)
 
     sharded
     //sharded.map { case ((i, j), w) =>
     //  ( (i/numShards, j/numShards), w)
     //}
-
-    //.map { case ((i, j), w) =>
-    //  ( (i%numShards, j%numShards), (i/numShards, j/numShards, w) )
-    //}
   }
 
-  def generateCoocurance(ids: Array[Int], windowSize: Int) = {
+  def generateCooccurrence(ids: Array[Int], windowSize: Int) = {
     val coocs = mutable.HashMap[(Int, Int), Double]().withDefaultValue(0)
       0 until ids.size foreach { pos =>
         val lid = ids(pos)
@@ -156,10 +173,10 @@ object SparkPrep {
   }
 
   /**
-    * For given co-ocurance matrix, shards it to <bold>numShards * numShards</bold> pices
+    * For given co-occurrence matrix, shards it to <bold>numShards * numShards</bold> pices
     *
     * @param coocs
-    * @param numShards number of shards along the dimention
+    * @param numShards number of shards along the dimension
     * @return
     */
   def mergeCoocsAndShard(coocs: RDD[((Int, Int), Double)], numShards: Int): RDD[((Int, Int), Double)] = {
@@ -189,7 +206,9 @@ object SparkPrep {
 }
 
 /**
-  * Number of partitions is square the number of shards
+  * Custom Partitioner to split co-occurrence matrix to smaller shards
+  *
+  * Number of partitions is square the number of shards.
   * @param numShards number of shards (per dimention)
   */
 class ShardPartitioner(numShards: Int) extends org.apache.spark.Partitioner {
@@ -257,27 +276,17 @@ object SparkPrepDriver {
     //  convert to IDs and persist (measure size/throughtput)
 
     //Builds co-occurrence matrix: RDD[ ((i, j), weight)
-    val shardedCoocs = SparkPrep.buildCoocuranceMatrix(
+    val shardedCoocs = SparkPrep.buildCooccurrenceMatrix(
       input.map(_.split("\t")),
       cli.window_size(), numShards,
       wordToIdVar
     )
 
-    /* debug output: single shard
-    val windowSize = cli.window_size()
-    val coocs = SparkPrep
-      .wordsToIds(input.map(_.split("\t")), wordToIdVar)
-      .flatMap(SparkPrep.generateCoocurance(_, windowSize))
-
-    val shardedCoocs = coocs
-      .reduceByKeyLocally(_+_)
-      .toSeq.sortBy(_._1)
-      .foreach { case ((i, j), w) =>
-          println(s"$i $j $w")
-      }
-    */
-    // debug output: before encoding to .pb
-    //shardedCoocs.saveAsTextFile(cli.output_dir())
+    // debug output: single shard
+    //val singleShardCoocs = SparkPrep.buildCooccurrenceMatrixInSingleShard(
+    //  input.map(_.split("\t")), cli.window_size(), numShards, wordToIdVar
+    //)
+    //singleShardCoocs.saveAsTextFile(cli.output_dir())
 
     //Output single tf.train.Example per partition
     val serializedPb = shardedCoocs.mapPartitionsWithIndex( (index, partition) => {

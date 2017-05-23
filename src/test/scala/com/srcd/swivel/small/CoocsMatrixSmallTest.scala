@@ -25,7 +25,7 @@ class CoocsMatrixSmallTest extends FunSuite {
     val lineIds = Array(id("a"), id("b"))
 
     // when
-    val coocs = SparkPrep.generateCoocurance(lineIds, wordWindow)
+    val coocs = SparkPrep.generateCooccurrence(lineIds, wordWindow)
 
     // then
     assert(coocs.size == expectedCoocs.size)
