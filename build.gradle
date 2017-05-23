@@ -8,7 +8,7 @@ apply plugin: 'propdeps-idea'
 apply plugin: 'propdeps-eclipse'
 
 buildscript {
-    repositories { 
+    repositories {
       jcenter()
       maven { url 'http://repo.spring.io/plugins-release' }
     }
@@ -19,10 +19,15 @@ buildscript {
 }
 
 repositories {
+  mavenLocal()
   mavenCentral()
   maven { url "https://oss.sonatype.org/content/repositories/snapshots/" }
   //for hadoop-clinet in local shadowJar mode
   maven { url "https://repository.cloudera.com/artifactory/cloudera-repos/" }
+  // for spark-tensorlfow-connector
+  //maven { url "https://dl.bintray.com/spark-packages/maven/" }
+  // for spark-hadoop
+  maven { url "https://tap.jfrog.io/tap/public-snapshots/" }
 }
 
 
@@ -42,15 +47,21 @@ jar {
 shadowJar {
   //add resourced to Jar
   //append('reference.conf')
-    zip64 true
+  zip64 true
+}
 
+idea {
+  module {
+    downloadJavadoc = false
+    downloadSources = true
+  }
 }
 
 compileScala {
-    scalaCompileOptions.useCompileDaemon = true
+  scalaCompileOptions.useCompileDaemon = true
 }
 tasks.withType(ScalaCompile) {
-    scalaCompileOptions.useAnt = false
+  scalaCompileOptions.useAnt = false
 }
 
 ext {
@@ -61,6 +72,10 @@ ext {
 dependencies {
     compile "org.scala-lang:scala-library:$scalaVersion.4"
     compile "org.rogach:scallop_$scalaVersion:2.1.2"
+    // for DataFrames
+    //compile "tapanalyticstoolkit:spark-tensorflow-connector:1.0.0-s_$scalaVersion"
+    // for RDDs
+    compile "org.tensorflow:tensorflow-hadoop:1.0-01232017-SNAPSHOT:shaded-protobuf"
 
     //spark
     provided 'org.apache.hadoop:hadoop-client:2.0.0-mr1-cdh4.6.0' //TODO(bzz): HDFS version
@@ -69,7 +84,5 @@ dependencies {
     //provided "org.apache.spark:spark-streaming_$scalaVersion:$sparkVersion"
 
     testCompile "org.scalatest:scalatest_$scalaVersion:2.2.1"
-
     testCompile "com.holdenkarau:spark-testing-base_$scalaVersion:${sparkVersion}_0.6.0"
-
 }

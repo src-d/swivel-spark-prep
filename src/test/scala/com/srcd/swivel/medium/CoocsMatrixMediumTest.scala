@@ -145,7 +145,7 @@ class CoocsMatrixMediumTest extends FunSuite with SharedSparkContext {
 
   def toShardIds(numShards: Int, cooc: ((Int,Int), Double)) = {
     val ((i,j),w) = cooc
-    ((i/numShards,j/numShards),w)
+    ((i,j),w)
   }
 
 

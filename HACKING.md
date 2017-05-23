@@ -299,3 +299,6 @@ val merged = p_data.mapPartitions {
    _.toArray.groupBy(_._1).mapValues(_.map(_._2).sum).toIterator
 }
 
+i = k%N
+j = k/N
+

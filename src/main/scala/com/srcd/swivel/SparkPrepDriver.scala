@@ -6,6 +6,11 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.rogach.scallop._
 
+import org.apache.hadoop.io.{NullWritable, BytesWritable}
+
+import org.tensorflow.example.{FloatList, Int64List, Feature, Features, Example}
+import org.tensorflow.hadoop.io.TFRecordFileOutputFormat
+
 import scala.collection.mutable
 import scala.util.Properties
 
@@ -118,9 +123,11 @@ object SparkPrep {
     val coocs = ids.flatMap(generateCoocurance(_, windowSize))
     val sharded = mergeCoocsAndShard(coocs, numShards)
 
-    sharded.map { case ((i, j), w) =>
-      ( (i/numShards, j/numShards), w)
-    }
+    sharded
+    //sharded.map { case ((i, j), w) =>
+    //  ( (i/numShards, j/numShards), w)
+    //}
+
     //.map { case ((i, j), w) =>
     //  ( (i%numShards, j%numShards), (i/numShards, j/numShards, w) )
     //}
@@ -149,7 +156,7 @@ object SparkPrep {
   }
 
   /**
-    * For given co-ocurance matrix, shards it to <bold>numShards^2</bold> pices
+    * For given co-ocurance matrix, shards it to <bold>numShards * numShards</bold> pices
     *
     * @param coocs
     * @param numShards number of shards along the dimention
@@ -167,7 +174,7 @@ object SparkPrep {
 
       //II.
       .reduceByKey(new ShardPartitioner(numShards), _+_)
-      .mapPartitions(_.toSeq.sortBy(_._1).toIterator)
+      .mapPartitions(_.toSeq.sortBy(_._1).toIterator, true)
       // or
       //.repartitionAndSortWithinPartitions(new ShardPartitioner(numShards))
 
@@ -206,7 +213,7 @@ class ShardPartitioner(numShards: Int) extends org.apache.spark.Partitioner {
 
 
 class Cli(arguments: Seq[String]) extends ScallopConf(arguments) {
-  version("swivel-spark-prep 0.1.0 2017 by Source{d}")
+  version("swivel-spark-prep 0.1.0 by Source{d}")
   banner("""Usage: swivel-spark-prep [OPTION]...
            |Swivel-spark-prep parallelize data pre-processing for Swivel ML model
            |Options:
@@ -242,13 +249,14 @@ object SparkPrepDriver {
 
     val wordToIdVar = sc.broadcast(wordToId)
     val numShards = dict.size / cli.shard_size()
+    val shardSize = cli.shard_size()
 
     // Optimisations:
     //  4b pointers -XX:+UseCompressedOops if <32Gb RAM
     //  tune DataStructures: http://fastutil.di.unimi.it
     //  convert to IDs and persist (measure size/throughtput)
 
-    //Builds co-ocurance matrix: RDD[ ((i, j), weight)
+    //Builds co-occurrence matrix: RDD[ ((i, j), weight)
     val shardedCoocs = SparkPrep.buildCoocuranceMatrix(
       input.map(_.split("\t")),
       cli.window_size(), numShards,
@@ -268,19 +276,19 @@ object SparkPrepDriver {
           println(s"$i $j $w")
       }
     */
+    // debug output: before encoding to .pb
+    //shardedCoocs.saveAsTextFile(cli.output_dir())
 
-    shardedCoocs.saveAsTextFile(cli.output_dir())
+    //Output single tf.train.Example per partition
+    val serializedPb = shardedCoocs.mapPartitionsWithIndex( (index, partition) => {
+      convertToProtobuf(index, partition, numShards, shardSize)
+    }, true)
+
+    serializedPb.saveAsNewAPIHadoopFile[TFRecordFileOutputFormat](cli.output_dir())
 
     // TODO(bzz): write the sorted vocab to {row, col}_vocab.txt
-    new java.io.PrintWriter(cli.output_dir() + "/dict_debug.txt") {
-      try {
-        dict.foreach { case (word, freq) =>
-          write(s"$word $freq\n")
-        }
-      } finally {close}
-    }
+    saveDebugDict(dict, cli.output_dir())
 
-    //TODO(bzz): Outup *.pb per partion using https://github.com/tensorflow/ecosystem/tree/master/spark/spark-tensorflow-connector
     //TODO(bzz): output `{row, col}_sums.txt`
   }
 
@@ -296,5 +304,59 @@ object SparkPrepDriver {
       .getOrCreate()
     (spark.sparkContext, spark)
   }
+
+  /**
+    * Given the set of co-occurrence in a single shard, converts them to tf.Example ProtoBuf format
+    * Uses https://github.com/tensorflow/ecosystem/tree/master/hadoop#use-with-spark
+    *
+    * @param index shard number
+    * @param partition Iterator over single shard
+    * @return
+    */
+  def convertToProtobuf(index: Int, partition: Iterator[((Int, Int), Double)], numShards: Int, shardSize: Int) = {
+      val intListRow = Int64List.newBuilder()
+      val intListCol = Int64List.newBuilder()
+
+      //invers of ShardPartitioner.getPartition()
+      val row_shard = index % numShards
+      val col_shard = index / numShards
+      for (i <- 0 to shardSize - 1) {
+        intListRow.addValue(row_shard + i * numShards)
+        intListCol.addValue(col_shard + i * numShards)
+      }
+
+      val intListSparseRow = Int64List.newBuilder()
+      val intListSparseCol = Int64List.newBuilder()
+      val floatListWeight = FloatList.newBuilder()
+      partition.foreach { case ((i, j), w) =>
+        intListSparseRow.addValue(i/numShards)
+        intListSparseCol.addValue(j/numShards)
+        floatListWeight.addValue(w.toFloat) //TODO(bzz): check how we loose accuracy here
+      }
+      val features = Features.newBuilder()
+        .putFeature("global_row", Feature.newBuilder().setInt64List(intListRow.build()).build())
+        .putFeature("global_col", Feature.newBuilder().setInt64List(intListCol.build()).build())
+        .putFeature("sparse_local_row", Feature.newBuilder().setInt64List(intListSparseRow.build()).build())
+        .putFeature("sparse_local_col", Feature.newBuilder().setInt64List(intListSparseCol.build()).build())
+        .putFeature("sparse_value", Feature.newBuilder().setFloatList(floatListWeight.build()).build())
+        .build()
+
+      val example = Example.newBuilder()
+        .setFeatures(features)
+        .build()
+
+      Seq((new BytesWritable(example.toByteArray/*.toString.getBytes*/), NullWritable.get())).toIterator
+    }
+
+  def saveDebugDict(dict: Seq[(String, Int)], outputDir: String): Unit = {
+    new java.io.PrintWriter(outputDir + "/dict_debug.txt") {
+      try {
+        dict.foreach { case (word, freq) =>
+          write(s"$word $freq\n")
+        }
+      } finally {close}
+    }
+  }
+
 
 }
