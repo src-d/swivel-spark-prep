@@ -1,0 +1,41 @@
+#!/bin/bash
+
+# Run preprocess for Swivel model on Apache Spark instance.
+# Need to have Apache Spark installed and configured locally
+
+E_NOT_BUILT=140
+E_NO_SPARK=141
+
+jar="build/libs/swivel-spark-0.0.1.jar"
+build_command="./gradlew build"
+pwd=$(pwd)
+
+if [[ ! -f "${jar}" ]]; then
+    echo "${jar} not found. Running build ${build_command}"
+    $build_command
+fi
+
+sparkSubmit() {
+    if hash spark-submit 2>/dev/null; then
+        spark-submit "$@"
+    elif [[ -n "${SPARK_HOME}" ]]; then
+        echo "Using spark-submit from ${SPARK_HOME}"
+        "${SPARK_HOME}/bin/spark-submit" "$@"
+    else
+        echo "Please, install and configure Apache Spark and set SPARK_HOME"
+        exit "${E_NO_SPARK}"
+    fi
+}
+
+
+sparkSubmit \
+  --class com.srcd.swivel.SparkPrepDriver \
+  --master "${MASTER:=local[*]}" \
+  --driver-memory 1G \
+  "${pwd}/${jar}" \
+  "$@"
+
+
+  #--executor-memory 32G \
+  #--total-executor-cores 16 \
+  #--properties-file spark-config.properties \

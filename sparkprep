@@ -1,0 +1,16 @@
+#!/bin/bash
+
+# Run preprocess for Swivel model on Apache Spark in local mode
+# Relies on Fat Jar \w all deps, including Apache Spark built
+
+fatjar="build/libs/swivel-spark-0.0.1-all.jar"
+build_command="./gradlew shadowJar"
+
+hash java >/dev/null 2>&1 || { echo "Please install Java" >&2; exit 1; }
+
+if [[ ! -f "$fatjar" ]]; then
+    echo "Running build ${build_command}"
+    $build_command
+fi
+
+java -jar "${fatjar}" "$@"

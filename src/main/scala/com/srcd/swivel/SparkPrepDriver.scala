@@ -1,7 +1,6 @@
 package com.srcd.swivel
 
 import java.io.File
-import java.nio.file.Path
 
 import org.apache.hadoop.io.{BytesWritable, NullWritable}
 import org.apache.spark.SparkContext
@@ -255,20 +254,19 @@ class ShardPartitioner(numShards: Int) extends org.apache.spark.Partitioner {
 
 
 class Cli(arguments: Seq[String]) extends ScallopConf(arguments) {
-  version("swivel-spark-prep 0.1.0 by Source{d}")
+  version("swivel-spark-prep 0.0.1 by Source{d}")
   banner("""Usage: swivel-spark-prep [OPTION]...
            |Swivel-spark-prep parallelize data pre-processing for Swivel ML model
            |Options:
            |""".stripMargin)
   footer("\nFor the details , consult https://github.com/tensorflow/models/tree/master/swivel#preparing-the-data-for-training")
 
-  val input = opt[String](required = true)
-  val output_dir = opt[String](default = Some(SparkPrep.defaultOutputDir))
-  val shard_size = opt[Int](default = Some(SparkPrep.defaultShardSize))
-  val min_count = opt[Int](default = Some(SparkPrep.defaultMinCount))
-  val max_vocab = opt[Int](default = Some(SparkPrep.defaultMaxVocab))
-  val window_size = opt[Int](default = Some(SparkPrep.defaultWindowSize))
-  verify()
+  val input = opt[String](name="input", noshort=true, required = true)
+  val outputDir = opt[String](name="output_dir", noshort=true, default = Some(SparkPrep.defaultOutputDir))
+  val shardSize = opt[Int](name="shard_size", noshort=true, default = Some(SparkPrep.defaultShardSize))
+  val minCount = opt[Int](name="min_count", noshort=true, default = Some(SparkPrep.defaultMinCount))
+  val maxVocab = opt[Int](name="max_vocab", noshort=true, default = Some(SparkPrep.defaultMaxVocab))
+  val windowSize = opt[Int](name="window_size", noshort=true, default = Some(SparkPrep.defaultWindowSize))
 }
 
 
@@ -280,6 +278,7 @@ object SparkPrepDriver {
       cli.printHelp()
       System.exit(1)
     }
+    cli.verify()
 
     val sparkMaster = Properties.envOrElse("MASTER", "local[*]")
     val (sc, spark) = getContext(sparkMaster)
@@ -287,11 +286,11 @@ object SparkPrepDriver {
     val input = sc.textFile(cli.input())
 
     //create word->id map
-    val (wordToId, dict) = SparkPrep.buildVocab(input, cli.min_count(), cli.max_vocab(), cli.shard_size())
+    val (wordToId, dict) = SparkPrep.buildVocab(input, cli.minCount(), cli.maxVocab(), cli.shardSize())
 
     val wordToIdVar = sc.broadcast(wordToId)
-    val numShards = dict.size / cli.shard_size()
-    val shardSize = cli.shard_size()
+    val numShards = dict.size / cli.shardSize()
+    val shardSize = cli.shardSize()
 
     // Optimisations:
     //  4b pointers -XX:+UseCompressedOops if <32Gb RAM
@@ -301,7 +300,7 @@ object SparkPrepDriver {
     //Builds co-occurrence matrix: RDD[ ((i, j), weight)
     val coocs = SparkPrep.buildCooccurrenceMatrix(
       input.map(_.split("\t")),
-      cli.window_size(), numShards,
+      cli.windowSize(), numShards,
       wordToIdVar
     )
     val shardedCoocs = SparkPrep.mergeCoocsAndShard(coocs, numShards)
@@ -315,10 +314,10 @@ object SparkPrepDriver {
       SparkPrep.convertToProtobuf(index, partition, numShards, shardSize)
     }, true)
 
-    serializedPb.saveAsNewAPIHadoopFile[TFRecordFileOutputFormat](cli.output_dir())
+    serializedPb.saveAsNewAPIHadoopFile[TFRecordFileOutputFormat](cli.outputDir())
 
-    writeRowColDict(dict, cli.output_dir())
-    writeAndCountRowColSums(shardedCoocs, cli.output_dir())
+    writeRowColDict(dict, cli.outputDir())
+    writeAndCountRowColSums(shardedCoocs, cli.outputDir())
   }
 
   /**
