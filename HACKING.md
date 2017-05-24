@@ -302,3 +302,7 @@ val merged = p_data.mapPartitions {
 i = k%N
 j = k/N
 
+
+val input = sc.textFile("./...")
+
+hist = input.flatMap(_.split("\t")).map(word => (word, 1)).reduceByKey(_ + _).collect()

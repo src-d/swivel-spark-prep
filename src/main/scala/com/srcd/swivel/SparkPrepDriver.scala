@@ -1,14 +1,15 @@
 package com.srcd.swivel
 
+import java.io.File
+import java.nio.file.Path
+
+import org.apache.hadoop.io.{BytesWritable, NullWritable}
 import org.apache.spark.SparkContext
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.rogach.scallop._
-
-import org.apache.hadoop.io.{NullWritable, BytesWritable}
-
-import org.tensorflow.example.{FloatList, Int64List, Feature, Features, Example}
+import org.tensorflow.example._
 import org.tensorflow.hadoop.io.TFRecordFileOutputFormat
 
 import scala.collection.mutable
@@ -101,29 +102,6 @@ object SparkPrep {
 
 
   /**
-    * Used for debug output
-    */
-  def buildCooccurrenceMatrixInSingleShard(
-    rdd: RDD[Array[String]],
-    windowSize: Int,
-    numShards: Int,
-    vocab: Broadcast[Map[String, Int]]
-  ) = {
-    val coocs = SparkPrep
-      .wordsToIds(rdd, vocab)
-      .flatMap(generateCooccurrence(_, windowSize))
-
-    val shardedCoocs = coocs
-      .reduceByKeyLocally(_+_)
-      .toSeq.sortBy(_._1)
-      .foreach { case ((i, j), w) =>
-          println(s"$i $j $w")
-      }
-    shardedCoocs
-  }
-
-
-  /**
     * Transforms to Id each token, and list elements of co-ocurence matrix.
     * Each matrix element (i,j) can be listed multiple times.
     *
@@ -142,33 +120,24 @@ object SparkPrep {
 
     val ids = wordsToIds(rdd, vocab)
     val coocs = ids.flatMap(generateCooccurrence(_, windowSize))
-    val sharded = mergeCoocsAndShard(coocs, numShards)
-
-    sharded
-    //sharded.map { case ((i, j), w) =>
-    //  ( (i/numShards, j/numShards), w)
-    //}
+    coocs
   }
 
   def generateCooccurrence(ids: Array[Int], windowSize: Int) = {
     val coocs = mutable.HashMap[(Int, Int), Double]().withDefaultValue(0)
-      0 until ids.size foreach { pos =>
+      0 until ids.length foreach { pos =>
         val lid = ids(pos)
-        val windowExtent = Math.min(windowSize + 1, ids.size - pos)
+        val windowExtent = Math.min(windowSize + 1, ids.length - pos)
         1 until windowExtent foreach { off =>
           val rid = ids(pos + off)
           val count = 1.0 / off
           val pair = (Math.min(lid, rid), Math.max(lid, rid))
           coocs(pair) += count
           coocs(pair.swap) += count
-          //sums[lid] += count
-          //sums[rid] += count
         }
-        //sums[lid] += 1.0
         val pair = (lid, lid)
-        coocs(pair) += 1.0  // Add 1 (not 1/2 as before) since we do output (a, b) and (b, a) separatly
+        coocs(pair) += 1.0  // Add 1 (not 1/2 as before) since we do not output (a, b) and (b, a) separately
       }
-      //TODO(bzz): output summs as well as coocs
       coocs
   }
 
@@ -203,7 +172,61 @@ object SparkPrep {
     shardedCoocs
   }
 
+  /**
+  * Used for debug output
+  */
+  def mergeCoocsInSingleShard(rdd: RDD[((Int, Int), Double)]) = rdd
+    .reduceByKeyLocally(_+_)
+    .toSeq.sortBy(_._1)
+    .foreach { case ((i, j), w) =>
+      println(s"$i $j $w")
+    }
+
+  /**
+    * Given the set of co-occurrence in a single shard, converts them to tf.Example ProtoBuf format
+    * Uses https://github.com/tensorflow/ecosystem/tree/master/hadoop#use-with-spark
+    *
+    * @param index shard number
+    * @param partition Iterator over single shard
+    * @return
+    */
+  def convertToProtobuf(index: Int, partition: Iterator[((Int, Int), Double)], numShards: Int, shardSize: Int) = {
+    val intListRow = Int64List.newBuilder()
+    val intListCol = Int64List.newBuilder()
+
+    //invers of ShardPartitioner.getPartition()
+    val row_shard = index % numShards
+    val col_shard = index / numShards
+    for (i <- 0 to shardSize - 1) {
+      intListRow.addValue(row_shard + i * numShards)
+      intListCol.addValue(col_shard + i * numShards)
+    }
+
+    val intListSparseRow = Int64List.newBuilder()
+    val intListSparseCol = Int64List.newBuilder()
+    val floatListWeight = FloatList.newBuilder()
+    partition.foreach { case ((i, j), w) =>
+      intListSparseRow.addValue(i / numShards)
+      intListSparseCol.addValue(j / numShards)
+      floatListWeight.addValue(w.toFloat) //TODO(bzz): check how we loose accuracy here
+    }
+    val features = Features.newBuilder()
+      .putFeature("global_row", Feature.newBuilder().setInt64List(intListRow.build()).build())
+      .putFeature("global_col", Feature.newBuilder().setInt64List(intListCol.build()).build())
+      .putFeature("sparse_local_row", Feature.newBuilder().setInt64List(intListSparseRow.build()).build())
+      .putFeature("sparse_local_col", Feature.newBuilder().setInt64List(intListSparseCol.build()).build())
+      .putFeature("sparse_value", Feature.newBuilder().setFloatList(floatListWeight.build()).build())
+      .build()
+
+    val example = Example.newBuilder()
+      .setFeatures(features)
+      .build()
+
+    Seq((new BytesWritable(example /*.toByteArray*/ .toString.getBytes), NullWritable.get())).toIterator
+  }
+
 }
+
 
 /**
   * Custom Partitioner to split co-occurrence matrix to smaller shards
@@ -276,31 +299,84 @@ object SparkPrepDriver {
     //  convert to IDs and persist (measure size/throughtput)
 
     //Builds co-occurrence matrix: RDD[ ((i, j), weight)
-    val shardedCoocs = SparkPrep.buildCooccurrenceMatrix(
+    val coocs = SparkPrep.buildCooccurrenceMatrix(
       input.map(_.split("\t")),
       cli.window_size(), numShards,
       wordToIdVar
     )
+    val shardedCoocs = SparkPrep.mergeCoocsAndShard(coocs, numShards)
 
     // debug output: single shard
-    //val singleShardCoocs = SparkPrep.buildCooccurrenceMatrixInSingleShard(
-    //  input.map(_.split("\t")), cli.window_size(), numShards, wordToIdVar
-    //)
+    //val singleShardCoocs = SparkPrep.mergeCoocsInSingleShard(coocs)
     //singleShardCoocs.saveAsTextFile(cli.output_dir())
 
     //Output single tf.train.Example per partition
     val serializedPb = shardedCoocs.mapPartitionsWithIndex( (index, partition) => {
-      convertToProtobuf(index, partition, numShards, shardSize)
+      SparkPrep.convertToProtobuf(index, partition, numShards, shardSize)
     }, true)
 
     serializedPb.saveAsNewAPIHadoopFile[TFRecordFileOutputFormat](cli.output_dir())
 
-    // TODO(bzz): write the sorted vocab to {row, col}_vocab.txt
-    saveDebugDict(dict, cli.output_dir())
-
-    //TODO(bzz): output `{row, col}_sums.txt`
+    writeRowColDict(dict, cli.output_dir())
+    writeAndCountRowColSums(shardedCoocs, cli.output_dir())
   }
 
+  /**
+    * Writes row and column dictionaries to `{row, col}_vocab.txt`
+    *
+    * @param dict
+    * @param outputDir
+    */
+  def writeRowColDict(dict: Seq[(String, Int)], outputDir: String, debug: Boolean = false) = {
+    writeDict(dict, outputDir, "row_vocab.txt", debug)
+    writeDict(dict, outputDir, "col_vocab.txt", debug)
+  }
+
+  def writeDict(dict: Seq[(String, Int)], outputDir: String, fileName: String, debug: Boolean) = {
+    val path = outputDir :: fileName :: Nil mkString File.separator
+    println(s"Writing dict to $path")
+    new java.io.PrintWriter(path) {
+      try {
+        dict.foreach { case (word, freq) =>
+          if (debug) {
+            write(s"$word $freq\n")
+          } else {
+            write(s"$word\n")
+          }
+        }
+      } finally {close}
+    }
+  }
+
+  /**
+    * Counts and writes marginal row and column sums to `{row, col}_sums.txt`
+    *
+    * @param coocs the co-occurrence matrix
+    */
+  def writeAndCountRowColSums(coocs: RDD[((Int, Int), Double)], outputDir: String) = {
+    val sum = coocs
+      .flatMap { case ((i, j), w) =>
+        Seq((i, w), (j, w))
+      }
+      .reduceByKey(_ + _)
+      .collect() //vocabulary fits in memory, so avoid extra shuffle and sort on driver
+      .sortBy(_._1)
+
+      witeSum(sum, outputDir, "row_sums.txt")
+      witeSum(sum, outputDir, "col_sums.txt")
+  }
+
+  def witeSum(sum: Array[(Int, Double)], outputDir: String, fileName: String) = {
+    val path = outputDir :: fileName :: Nil mkString File.separator
+    println(s"Writing sum to $path")
+    new java.io.PrintWriter(path) {
+      try {
+        sum.foreach { case (_, w) =>
+          write(s"${w/2}\n")
+        }
+      } finally { close }
+    }
+  }
 
   def getContext(sparkMaster: String): (SparkContext, SparkSession) = {
     //conf.registerKryoClasses(Array(classOf[xxxx]))
@@ -313,59 +389,5 @@ object SparkPrepDriver {
       .getOrCreate()
     (spark.sparkContext, spark)
   }
-
-  /**
-    * Given the set of co-occurrence in a single shard, converts them to tf.Example ProtoBuf format
-    * Uses https://github.com/tensorflow/ecosystem/tree/master/hadoop#use-with-spark
-    *
-    * @param index shard number
-    * @param partition Iterator over single shard
-    * @return
-    */
-  def convertToProtobuf(index: Int, partition: Iterator[((Int, Int), Double)], numShards: Int, shardSize: Int) = {
-      val intListRow = Int64List.newBuilder()
-      val intListCol = Int64List.newBuilder()
-
-      //invers of ShardPartitioner.getPartition()
-      val row_shard = index % numShards
-      val col_shard = index / numShards
-      for (i <- 0 to shardSize - 1) {
-        intListRow.addValue(row_shard + i * numShards)
-        intListCol.addValue(col_shard + i * numShards)
-      }
-
-      val intListSparseRow = Int64List.newBuilder()
-      val intListSparseCol = Int64List.newBuilder()
-      val floatListWeight = FloatList.newBuilder()
-      partition.foreach { case ((i, j), w) =>
-        intListSparseRow.addValue(i/numShards)
-        intListSparseCol.addValue(j/numShards)
-        floatListWeight.addValue(w.toFloat) //TODO(bzz): check how we loose accuracy here
-      }
-      val features = Features.newBuilder()
-        .putFeature("global_row", Feature.newBuilder().setInt64List(intListRow.build()).build())
-        .putFeature("global_col", Feature.newBuilder().setInt64List(intListCol.build()).build())
-        .putFeature("sparse_local_row", Feature.newBuilder().setInt64List(intListSparseRow.build()).build())
-        .putFeature("sparse_local_col", Feature.newBuilder().setInt64List(intListSparseCol.build()).build())
-        .putFeature("sparse_value", Feature.newBuilder().setFloatList(floatListWeight.build()).build())
-        .build()
-
-      val example = Example.newBuilder()
-        .setFeatures(features)
-        .build()
-
-      Seq((new BytesWritable(example.toByteArray/*.toString.getBytes*/), NullWritable.get())).toIterator
-    }
-
-  def saveDebugDict(dict: Seq[(String, Int)], outputDir: String): Unit = {
-    new java.io.PrintWriter(outputDir + "/dict_debug.txt") {
-      try {
-        dict.foreach { case (word, freq) =>
-          write(s"$word $freq\n")
-        }
-      } finally {close}
-    }
-  }
-
 
 }

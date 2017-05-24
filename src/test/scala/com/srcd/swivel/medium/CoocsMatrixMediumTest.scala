@@ -85,10 +85,14 @@ class CoocsMatrixMediumTest extends FunSuite with SharedSparkContext {
     val tokenLines = Seq(Array("a","b"), Array("a","b","c"))
 
     // when
-    val coocs = SparkPrep.buildCooccurrenceMatrix(sc.parallelize(tokenLines), wordWindow, numShards, wordToIdVar).collect()
+    val coocs = SparkPrep.mergeCoocsAndShard(
+      SparkPrep.buildCooccurrenceMatrix(sc.parallelize(tokenLines), wordWindow, numShards, wordToIdVar),
+      numShards
+    )
+      .collect()
 
     // then
-    assert(coocs.length == expectedCoocs.size)
+    assert(coocs.length == expectedCoocs.length)
     coocs.sortBy(_._1) should equal (expectedCoocs)
   }
 
@@ -107,7 +111,7 @@ class CoocsMatrixMediumTest extends FunSuite with SharedSparkContext {
       .groupBy(_._1).mapValues(_.map(_._2).sum) // for tests only, this happens later in pipeline
 
     // then
-    //assert(coocs.size == coocsFor3lines.size)
+    assert(coocs.size == coocsFor3lines.size)
     //coocs.toSet should equal (coocsFor3lines.toSet)
     coocs.toSeq.sortBy {_._1} should equal (coocsFor3lines.sortBy {_._1})
   }
