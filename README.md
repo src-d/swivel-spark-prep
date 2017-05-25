@@ -6,7 +6,7 @@ Distributed equivalent of `prep.py` and `fastprep` from [Swivel](https://github.
 
 # Development
 ```
-./gradlew idea # if using InteliJ Idea
+./gradlew idea # if using InteliJ
 ./gradlew build
 ./gradlew test
 ```
@@ -23,4 +23,7 @@ On Apache Spark cluster
 ./sparkprep-cluster --help
 ```
 
-See [official instructions](https://github.com/tensorflow/ecosystem/tree/master/spark/spark-tensorflow-connector#using-spark-shell) on how to run with `--jar` instead of `--packages`
+
+
+
+

@@ -12,6 +12,7 @@ import org.tensorflow.example._
 import org.tensorflow.hadoop.io.TFRecordFileOutputFormat
 
 import scala.collection.mutable
+import scala.io.Source
 import scala.util.Properties
 
 
@@ -77,10 +78,28 @@ object SparkPrep {
   def buildVocab(
     rdd: RDD[String], minCount: Int = defaultMinCount, maxVocab: Int = defaultMaxVocab, shardSize: Int = defaultShardSize
   ): (Map[String, Int], Seq[(String, Int)]) = {
-
+    println("Building vocabulary")
     val hist = SparkPrep.buildHistogram(rdd)
     val dict = SparkPrep.dictFromHist(hist, minCount, maxVocab, shardSize)
     val vocab = SparkPrep.vocabFromDict(dict)
+    println(s"Done. ${dict.length} words found")
+
+    (vocab, dict)
+  }
+
+  /**
+    * Reads existing vocabulary
+    * @param vocabFile path to vocabulary file
+    */
+  def readVocab(vocabFile: String): (Map[String, Int], Seq[(String, Int)]) = {
+    println(s"Reading vocabulary from ${vocabFile}")
+    val dict = Source.fromFile(vocabFile)
+      .getLines
+      .toList
+      .zipWithIndex
+    val vocab = dict.toMap
+    println(s"Done. ${dict.length} words found")
+
     (vocab, dict)
   }
 
@@ -221,7 +240,7 @@ object SparkPrep {
       .setFeatures(features)
       .build()
 
-    Seq((new BytesWritable(example /*.toByteArray*/ .toString.getBytes), NullWritable.get())).toIterator
+    Seq((new BytesWritable(example.toByteArray/*.toString.getBytes*/), NullWritable.get())).toIterator
   }
 
 }
@@ -267,6 +286,7 @@ class Cli(arguments: Seq[String]) extends ScallopConf(arguments) {
   val minCount = opt[Int](name="min_count", noshort=true, default = Some(SparkPrep.defaultMinCount))
   val maxVocab = opt[Int](name="max_vocab", noshort=true, default = Some(SparkPrep.defaultMaxVocab))
   val windowSize = opt[Int](name="window_size", noshort=true, default = Some(SparkPrep.defaultWindowSize))
+  val vocab = opt[String](name="vocab", noshort=true, default = Some(""))
 }
 
 
@@ -285,8 +305,12 @@ object SparkPrepDriver {
 
     val input = sc.textFile(cli.input())
 
-    //create word->id map
-    val (wordToId, dict) = SparkPrep.buildVocab(input, cli.minCount(), cli.maxVocab(), cli.shardSize())
+    // Create word->id map
+    val (wordToId, dict) = if (cli.vocab().isEmpty) {
+      SparkPrep.buildVocab(input, cli.minCount(), cli.maxVocab(), cli.shardSize())
+    } else {
+      SparkPrep.readVocab(cli.vocab())
+    }
 
     val wordToIdVar = sc.broadcast(wordToId)
     val numShards = dict.size / cli.shardSize()
@@ -297,7 +321,7 @@ object SparkPrepDriver {
     //  tune DataStructures: http://fastutil.di.unimi.it
     //  convert to IDs and persist (measure size/throughtput)
 
-    //Builds co-occurrence matrix: RDD[ ((i, j), weight)
+    // Builds co-occurrence matrix: RDD[ ((i, j), weight)
     val coocs = SparkPrep.buildCooccurrenceMatrix(
       input.map(_.split("\t")),
       cli.windowSize(), numShards,
@@ -313,7 +337,6 @@ object SparkPrepDriver {
     val serializedPb = shardedCoocs.mapPartitionsWithIndex( (index, partition) => {
       SparkPrep.convertToProtobuf(index, partition, numShards, shardSize)
     }, true)
-
     serializedPb.saveAsNewAPIHadoopFile[TFRecordFileOutputFormat](cli.outputDir())
 
     writeRowColDict(dict, cli.outputDir())
