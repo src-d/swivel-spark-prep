@@ -6,9 +6,9 @@
 E_NOT_BUILT=140
 E_NO_SPARK=141
 
-jar="build/libs/swivel-spark-0.0.1.jar"
+dir="${PWD##*/}"
+jar="build/libs/${dir}-0.0.1.jar"
 build_command="./gradlew build"
-pwd=$(pwd)
 
 if [[ ! -f "${jar}" ]]; then
     echo "${jar} not found. Running build ${build_command}"
@@ -32,7 +32,7 @@ sparkSubmit \
   --class com.srcd.swivel.SparkPrepDriver \
   --master "${MASTER:=local[*]}" \
   --driver-memory 1G \
-  "${pwd}/${jar}" \
+  "${PWD}/${jar}" \
   "$@"
 
 
