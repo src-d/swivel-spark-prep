@@ -1,4 +1,4 @@
-# Swivel Spark prep
+# Swivel Spark prep [![Build Status](https://travis-ci.org/src-d/swivel-spark-prep.svg?branch=master)](https://travis-ci.org/src-d/swivel-spark-prep)
 > Distributed data preparation for Swivel model
 
 Distributed equivalent of `prep.py` and `fastprep` from [Swivel](https://github.com/tensorflow/models/blob/master/swivel/) using Apache Spark.
