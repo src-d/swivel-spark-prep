@@ -1,10 +1,10 @@
-package com.srcd.swivel.medium
+package tech.sourced.swivel.medium
 
 import com.holdenkarau.spark.testing.SharedSparkContext
-import com.srcd.swivel.SparkPrep
 import org.junit.runner.RunWith
 import org.scalatest.FunSuite
 import org.scalatest.junit.JUnitRunner
+import tech.sourced.swivel.SparkPrep
 
 
 @RunWith(classOf[JUnitRunner]) //TODO(bzz): research https://plugins.gradle.org/plugin/com.github.maiflai.scalatesta
