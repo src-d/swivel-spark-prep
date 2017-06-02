@@ -29,7 +29,7 @@ sparkSubmit() {
 
 
 sparkSubmit \
-  --class com.srcd.swivel.SparkPrepDriver \
+  --class tech.sourced.swivel.SparkPrepDriver \
   --master "${MASTER:=local[*]}" \
   --driver-memory 1G \
   --jars tensorflow-hadoop-1.0-SNAPSHOT-shaded-protobuf.jar
