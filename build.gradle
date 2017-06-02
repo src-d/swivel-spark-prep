@@ -34,7 +34,7 @@ repositories {
 version = '0.0.1'
 jar {
     manifest {
-        attributes 'Main-Class': 'com.srcd.swivel.SparkPrepDriver'
+        attributes 'Main-Class': 'tech.sourced.swivel.SparkPrepDriver'
     }
     archiveName "swivel-spark-${version}.jar"
     from {
