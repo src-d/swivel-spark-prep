@@ -1,7 +1,6 @@
 package tech.sourced.swivel.medium
 
 import com.holdenkarau.spark.testing.SharedSparkContext
-import com.srcd.swivel.SparkPrep
 import org.apache.spark.broadcast.Broadcast
 import org.junit.runner.RunWith
 import org.scalatest.FunSuite

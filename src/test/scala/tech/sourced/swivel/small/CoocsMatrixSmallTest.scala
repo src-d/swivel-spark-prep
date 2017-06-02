@@ -1,6 +1,5 @@
 package tech.sourced.swivel.small
 
-import com.srcd.swivel.SparkPrep
 import org.junit.runner.RunWith
 import org.scalatest.FunSuite
 import org.scalatest.Matchers._
@@ -8,7 +7,7 @@ import org.scalatest.junit.JUnitRunner
 import tech.sourced.swivel.SparkPrep
 
 /**
-  * Co-ocurence generation logic that does not depend on Spark
+  * Co-occurrence generation logic that does not depend on Spark
   */
 @RunWith(classOf[JUnitRunner]) //TODO(bzz): research https://plugins.gradle.org/plugin/com.github.maiflai.scalatesta
 class CoocsMatrixSmallTest extends FunSuite {

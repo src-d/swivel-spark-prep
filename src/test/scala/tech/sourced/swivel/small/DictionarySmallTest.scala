@@ -1,6 +1,5 @@
 package tech.sourced.swivel.small
 
-import com.srcd.swivel.SparkPrep
 import org.junit.runner.RunWith
 import org.scalatest.FunSuite
 import org.scalatest.junit.JUnitRunner
