@@ -8,12 +8,14 @@ import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.rogach.scallop._
+
 import org.tensorflow.example._
-import org.tensorflow.hadoop.io.TFRecordFileOutputFormat
+import org.tensorflow.hadoop.io.WholeFileOutputFormat
 
 import scala.collection.mutable
 import scala.io.Source
 import scala.util.Properties
+
 
 
 /**
@@ -337,7 +339,7 @@ object SparkPrepDriver {
     val serializedPb = shardedCoocs.mapPartitionsWithIndex( (index, partition) => {
       SparkPrep.convertToProtobuf(index, partition, numShards, shardSize)
     }, true)
-    serializedPb.saveAsNewAPIHadoopFile[TFRecordFileOutputFormat](cli.outputDir())
+    serializedPb.saveAsNewAPIHadoopFile[WholeFileOutputFormat](cli.outputDir())
 
     writeRowColDict(dict, cli.outputDir())
     writeAndCountRowColSums(shardedCoocs, cli.outputDir())
