@@ -1,4 +1,4 @@
-package com.srcd.swivel
+package tech.sourced.swivel
 
 import org.rogach.scallop.ScallopConf
 
