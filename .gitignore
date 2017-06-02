@@ -1,3 +1,14 @@
+*.iml
+*.ipr
+*.iws
+.idea
+.gradle
+*~
+.#*
+build
+
+
+#
 *.class
 *.log
 
@@ -15,3 +26,5 @@ project/plugins/project/
 # Scala-IDE specific
 .scala_dependencies
 .worksheet
+
+.DS_Store

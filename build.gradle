@@ -1,0 +1,87 @@
+apply plugin: 'eclipse'
+apply plugin: 'idea'
+apply plugin: 'scala'
+apply plugin: 'com.github.johnrengelman.shadow'
+//for provided and optional scopes
+apply plugin: 'propdeps'
+apply plugin: 'propdeps-idea'
+apply plugin: 'propdeps-eclipse'
+
+buildscript {
+    repositories {
+      jcenter()
+      maven { url 'http://repo.spring.io/plugins-release' }
+    }
+    dependencies {
+      classpath 'com.github.jengelman.gradle.plugins:shadow:1.2.4'
+      classpath 'org.springframework.build.gradle:propdeps-plugin:0.0.7'
+    }
+}
+
+repositories {
+  mavenLocal()
+  mavenCentral()
+  maven { url "https://oss.sonatype.org/content/repositories/snapshots/" }
+  //for hadoop-clinet in local shadowJar mode
+  maven { url "https://repository.cloudera.com/artifactory/cloudera-repos/" }
+  // for spark-tensorlfow-connector
+  //maven { url "https://dl.bintray.com/spark-packages/maven/" }
+  // for spark-hadoop
+  maven { url "https://tap.jfrog.io/tap/public-snapshots/" }
+}
+
+
+version = '0.0.1'
+jar {
+    manifest {
+        attributes 'Main-Class': 'com.srcd.swivel.SparkPrepDriver'
+    }
+    archiveName "swivel-spark-${version}.jar"
+    from {
+        (configurations.default).collect {
+            it.isDirectory() ? it : zipTree(it)
+        }
+    }
+}
+
+shadowJar {
+  //add resourced to Jar
+  //append('reference.conf')
+  zip64 true
+}
+
+idea {
+  module {
+    downloadJavadoc = false
+    downloadSources = true
+  }
+}
+
+compileScala {
+  scalaCompileOptions.useCompileDaemon = true
+}
+tasks.withType(ScalaCompile) {
+  scalaCompileOptions.useAnt = false
+}
+
+ext {
+  scalaVersion = '2.11'
+  sparkVersion = '2.1.0'
+}
+
+dependencies {
+    compile "org.scala-lang:scala-library:$scalaVersion.4"
+    compile "org.rogach:scallop_$scalaVersion:2.1.2"
+    // for DataFrames
+    //compile "tapanalyticstoolkit:spark-tensorflow-connector:1.0.0-s_$scalaVersion"
+    // for RDDs (and for tf.Example proto)
+    compile "org.tensorflow:tensorflow-hadoop:1.0-01232017-SNAPSHOT:shaded-protobuf"
+
+    //spark
+    provided 'org.apache.hadoop:hadoop-client:2.0.0-mr1-cdh4.6.0' //TODO(bzz): HDFS version
+    provided "org.apache.spark:spark-core_$scalaVersion:$sparkVersion"
+    provided "org.apache.spark:spark-sql_$scalaVersion:$sparkVersion"
+
+    testCompile "org.scalatest:scalatest_$scalaVersion:2.2.1"
+    testCompile "com.holdenkarau:spark-testing-base_$scalaVersion:${sparkVersion}_0.6.0"
+}
