@@ -17,7 +17,6 @@ import scala.io.Source
 import scala.util.Properties
 
 
-
 /**
   * Distributed data pre-processing for Swivel algorithm https://arxiv.org/abs/1602.02215
   *
@@ -32,12 +31,11 @@ object SparkPrep {
   val defaultWindowSize = 10
   val defaultOutputDir = "/tmp/swivel-spark"
 
-  /*
+  /**
    * Histogram:  word -> freq
    * Dictionary: id -> (word, freq) _ordered_ seq of word freq tuples
    * Vocabulary: word -> id _un-ordered_ Map
    */
-
   def buildHistogram(rdd: RDD[String]): Seq[(String, Int)] = {
      rdd.flatMap(_.split("\t"))
         .map(word => (word, 1))
@@ -119,7 +117,6 @@ object SparkPrep {
         }
       })
   }
-
 
   /**
     * Transforms to Id each token, and list elements of co-ocurence matrix.
@@ -273,7 +270,6 @@ class ShardPartitioner(numShards: Int) extends org.apache.spark.Partitioner {
 }
 
 
-
 class Cli(arguments: Seq[String]) extends ScallopConf(arguments) {
   version("swivel-spark-prep 0.0.1 by Source{d}")
   banner("""Usage: swivel-spark-prep [OPTION]...
@@ -318,7 +314,7 @@ object SparkPrepDriver {
     val numShards = dict.size / cli.shardSize()
     val shardSize = cli.shardSize()
 
-    // Optimisations:
+    // TODO(bzz) explore possible optimisations:
     //  4b pointers -XX:+UseCompressedOops if <32Gb RAM
     //  tune DataStructures: http://fastutil.di.unimi.it
     //  convert to IDs and persist (measure size/throughtput)
@@ -330,10 +326,6 @@ object SparkPrepDriver {
       wordToIdVar
     )
     val shardedCoocs = SparkPrep.mergeCoocsAndShard(coocs, numShards)
-
-    // debug output: single shard
-    //val singleShardCoocs = SparkPrep.mergeCoocsInSingleShard(coocs)
-    //singleShardCoocs.saveAsTextFile(cli.output_dir())
 
     //Output single tf.train.Example per partition
     val serializedPb = shardedCoocs.mapPartitionsWithIndex( (index, partition) => {
