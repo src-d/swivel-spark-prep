@@ -18,9 +18,9 @@ On signle maching, Apache Spark in Local mode
 ./sparkprep --help
 ```
 
-On Apache Spark cluster
+On Apache Spark standalone cluster
 ```
-./sparkprep-cluster --help
+MASTER="<master-url>" ./sparkprep-cluster --help
 ```
 
 
