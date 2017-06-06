@@ -1,5 +1,5 @@
 # Swivel Spark prep [![Build Status](https://travis-ci.org/src-d/swivel-spark-prep.svg?branch=master)](https://travis-ci.org/src-d/swivel-spark-prep)
-> Distributed data preparation for Swivel model
+> Distributed data preparation for the Swivel model
 
 Distributed equivalent of `prep.py` and `fastprep` from [Swivel](https://github.com/tensorflow/models/blob/master/swivel/) using Apache Spark.
 
@@ -13,13 +13,13 @@ Distributed equivalent of `prep.py` and `fastprep` from [Swivel](https://github.
 
 # Run
 
-On signle maching, Apache Spark in Local mode
+On a single machine, Apache Spark in Local mode
 ```
 ./gradlew shadowJar
 ./sparkprep --help
 ```
 
-On Apache Spark standalone cluster
+On an Apache Spark standalone cluster
 ```
 ./gradlew build
 
