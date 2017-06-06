@@ -90,15 +90,22 @@ object SparkPrep {
     * Reads existing vocabulary
     * @param vocabFile path to vocabulary file
     */
-  def readVocab(vocabFile: String): (Map[String, Int], Seq[(String, Int)]) = {
-    println(s"Reading vocabulary from ${vocabFile}")
-    val dict = Source.fromFile(vocabFile)
-      .getLines
-      .toList
-      .zipWithIndex
+  def readVocab(vocabFile: String, sc: SparkContext): (Map[String, Int], Seq[(String, Int)]) = {
+    val dict = if (sc == null) { //mostly for tests
+      println(s"Reading vocabulary from local FS ${vocabFile}")
+      Source.fromFile(vocabFile)
+        .getLines
+        .toList
+        .zipWithIndex
+    } else {
+      println(s"Reading vocabulary from cluster FS ${vocabFile}")
+      sc.textFile(vocabFile, 1)
+        .collect
+        .toList
+        .zipWithIndex
+    }
     val vocab = dict.toMap
     println(s"Done. ${dict.length} words found")
-
     (vocab, dict)
   }
 
@@ -271,7 +278,7 @@ object SparkPrepDriver {
     val (wordToId, dict) = if (cli.vocab().isEmpty) {
       SparkPrep.buildVocab(input, cli.minCount(), cli.maxVocab(), cli.shardSize())
     } else {
-      SparkPrep.readVocab(cli.vocab())
+      SparkPrep.readVocab(cli.vocab(), sc)
     }
 
     val wordToIdVar = sc.broadcast(wordToId)
