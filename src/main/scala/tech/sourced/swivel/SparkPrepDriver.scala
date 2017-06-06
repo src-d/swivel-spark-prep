@@ -165,26 +165,9 @@ object SparkPrep {
     * @return
     */
   def mergeCoocsAndShard(coocs: RDD[((Int, Int), Double)], numShards: Int): RDD[((Int, Int), Double)] = {
-    //TODO(bzz): if time permits, compare performance of 3 possible impls below
     val shardedCoocs = coocs
-      //I. repartitionAndSort + smart manual reduce over .mapPartition(), takeing advantage of key order
-      //  .repartitionAndSortWithinPartitions(new ShardPartitioner(numShards))
-      //  .mapPartitions { iter =>
-      //    for (x <- iter) {
-      //  }
-      //}
-
-      //II.
       .reduceByKey(new ShardPartitioner(numShards), _+_)
       .mapPartitions(_.toSeq.sortBy(_._1).toIterator, true)
-      // or
-      //.repartitionAndSortWithinPartitions(new ShardPartitioner(numShards))
-
-      //III. partition + dumb manual 'reduce' over .mapPartitons()
-      //.partitionBy(new ShardPartitioner(numShards))
-      //.mapPartitions { _.toArray.groupBy(_._1).mapValues(_.map(_._2).sum).toIterator }
-      //  or same, through (more performant?)
-      //.mapPartitions(reducePartition) from PairRDDFunctions.reduceByKeyLocally()
     shardedCoocs
   }
 
