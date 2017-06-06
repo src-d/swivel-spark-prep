@@ -72,16 +72,18 @@ ext {
 dependencies {
     compile "org.scala-lang:scala-library:$scalaVersion.4"
     compile "org.rogach:scallop_$scalaVersion:2.1.2"
-    // for DataFrames
-    //compile "tapanalyticstoolkit:spark-tensorflow-connector:1.0.0-s_$scalaVersion"
     // for RDDs (and for tf.Example proto)
     compile "org.tensorflow:tensorflow-hadoop:1.0-01232017-SNAPSHOT:shaded-protobuf"
 
     //spark
-    provided 'org.apache.hadoop:hadoop-client:2.0.0-mr1-cdh4.6.0' //TODO(bzz): HDFS version
+    provided 'org.apache.hadoop:hadoop-client:2.0.0-mr1-cdh4.6.0' //TODO(bzz): pick HDFS version
     provided "org.apache.spark:spark-core_$scalaVersion:$sparkVersion"
     provided "org.apache.spark:spark-sql_$scalaVersion:$sparkVersion"
 
     testCompile "org.scalatest:scalatest_$scalaVersion:2.2.1"
-    testCompile "com.holdenkarau:spark-testing-base_$scalaVersion:${sparkVersion}_0.6.0"
+    testCompile("com.holdenkarau:spark-testing-base_$scalaVersion:${sparkVersion}_0.6.0") {
+        exclude group: 'org.scalacheck'
+        exclude group: 'org.scalactic'
+        exclude group: 'org.scalatest'
+    }
 }
