@@ -295,11 +295,6 @@ object SparkPrepDriver {
     val numShards = dict.size / cli.shardSize()
     val shardSize = cli.shardSize()
 
-    // TODO(bzz) explore possible optimisations:
-    //  4b pointers -XX:+UseCompressedOops if <32Gb RAM
-    //  tune DataStructures: http://fastutil.di.unimi.it
-    //  convert to IDs and persist (measure size/throughtput)
-
     // Builds co-occurrence matrix: RDD[ ((i, j), weight)
     val coocs = SparkPrep.buildCooccurrenceMatrix(
       input.map(_.split("\t")),
