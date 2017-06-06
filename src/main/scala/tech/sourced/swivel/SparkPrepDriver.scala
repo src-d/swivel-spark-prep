@@ -7,7 +7,6 @@ import org.apache.spark.SparkContext
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
-import org.rogach.scallop._
 
 import org.tensorflow.example._
 import org.tensorflow.hadoop.io.WholeFileOutputFormat
@@ -315,8 +314,8 @@ object SparkPrepDriver {
     }, true)
     serializedPb.saveAsNewAPIHadoopFile[WholeFileOutputFormat](cli.outputDir())
 
-    writeRowColDict(dict, cli.outputDir())
-    writeAndCountRowColSums(shardedCoocs, cli.outputDir())
+    writeRowColDict(sc.parallelize(dict, 1), cli.outputDir())
+    writeAndCountRowColSums(shardedCoocs, cli.outputDir(), sc)
   }
 
   /**
@@ -325,12 +324,12 @@ object SparkPrepDriver {
     * @param dict
     * @param outputDir
     */
-  def writeRowColDict(dict: Seq[(String, Int)], outputDir: String, debug: Boolean = false) = {
-    writeDict(dict, outputDir, "row_vocab.txt", debug)
-    writeDict(dict, outputDir, "col_vocab.txt", debug)
+  def writeRowColDict(dict: RDD[(String, Int)], outputDir: String, debug: Boolean = false) = {
+    writeDictToHdfs(dict, outputDir, "row_vocab.txt", debug)
+    writeDictToHdfs(dict, outputDir, "col_vocab.txt", debug)
   }
 
-  def writeDict(dict: Seq[(String, Int)], outputDir: String, fileName: String, debug: Boolean) = {
+  def writeDictToLocalFs(dict: Seq[(String, Int)], outputDir: String, fileName: String, debug: Boolean) = {
     val path = outputDir :: fileName :: Nil mkString File.separator
     println(s"Writing dict to $path")
     new java.io.PrintWriter(path) {
@@ -346,12 +345,17 @@ object SparkPrepDriver {
     }
   }
 
+  def writeDictToHdfs(dict: RDD[(String, Int)], outputDir: String, fileName: String, debug: Boolean) = {
+    val path = outputDir :: fileName :: Nil mkString File.separator
+    dict.map(_._1).saveAsTextFile(path)
+  }
+
   /**
     * Counts and writes marginal row and column sums to `{row, col}_sums.txt`
     *
     * @param coocs the co-occurrence matrix
     */
-  def writeAndCountRowColSums(coocs: RDD[((Int, Int), Double)], outputDir: String) = {
+  def writeAndCountRowColSums(coocs: RDD[((Int, Int), Double)], outputDir: String, sc: SparkContext) = {
     val sum = coocs
       .flatMap { case ((i, j), w) =>
         Seq((i, w), (j, w))
@@ -360,11 +364,13 @@ object SparkPrepDriver {
       .collect() //vocabulary fits in memory, so avoid extra shuffle and sort on driver
       .sortBy(_._1)
 
-      witeSum(sum, outputDir, "row_sums.txt")
-      witeSum(sum, outputDir, "col_sums.txt")
+    val pSum = sc.parallelize(sum, 1)
+
+    writeSumToHdfs(pSum, outputDir, "row_sums.txt")
+    writeSumToHdfs(pSum, outputDir, "col_sums.txt")
   }
 
-  def witeSum(sum: Array[(Int, Double)], outputDir: String, fileName: String) = {
+  def writeSumToLocalFs(sum: Array[(Int, Double)], outputDir: String, fileName: String) = {
     val path = outputDir :: fileName :: Nil mkString File.separator
     println(s"Writing sum to $path")
     new java.io.PrintWriter(path) {
@@ -374,6 +380,11 @@ object SparkPrepDriver {
         }
       } finally { close }
     }
+  }
+
+  def writeSumToHdfs(dict: RDD[(Int, Double)], outputDir: String, fileName: String) = {
+    val path = outputDir :: fileName :: Nil mkString File.separator
+    dict.map(_._2 / 2).saveAsTextFile(path)
   }
 
   def getContext(sparkMaster: String): (SparkContext, SparkSession) = {

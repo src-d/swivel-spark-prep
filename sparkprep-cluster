@@ -7,7 +7,7 @@ E_NOT_BUILT=140
 E_NO_SPARK=141
 
 dir="${PWD##*/}"
-jar="build/libs/${dir}-0.0.1.jar"
+jar="build/libs/swivel-spark-0.0.1.jar" #jar name hard-coded in ./build.gradle
 build_command="./gradlew build"
 
 if [[ ! -f "${jar}" ]]; then
@@ -30,13 +30,17 @@ sparkSubmit() {
 
 sparkSubmit \
   --class tech.sourced.swivel.SparkPrepDriver \
-  --master "${MASTER:=local[*]}" \
-  --driver-memory 1G \
-  --jars tensorflow-hadoop-1.0-SNAPSHOT-shaded-protobuf.jar
+  --master "${MASTER:=yarn}" \
+  --deploy-mode client \
+  --name "Swivel sparkprep" \
+  --jars tensorflow-hadoop-1.0-*-shaded-protobuf.jar \
   "${PWD}/${jar}" \
   "$@"
 
 
+  #--master "${MASTER:=local[*]}" \
+  #--driver-memory 1G \
   #--executor-memory 32G \
   #--total-executor-cores 16 \
   #--properties-file spark-config.properties \
+
