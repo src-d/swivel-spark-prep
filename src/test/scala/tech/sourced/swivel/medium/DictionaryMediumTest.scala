@@ -39,4 +39,18 @@ class DictionaryMediumTest extends FunSuite with SharedSparkContext {
     assert(words("a") === 0)
   }
 
+  test("read vocabulary: remote/cluster path") {
+    // given
+    val path = "src/test/resources/row_vocab.txt"
+
+    // when
+    val (vocab, dict) = SparkPrep.readVocab(path, sc)
+
+    // then
+    assert(vocab.size === 4)
+    assert(dict.size === 4)
+    assert(dict.head == ("a", 0))
+    assert(dict.last == ("d", 3))
+  }
+
 }

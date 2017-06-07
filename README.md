@@ -24,7 +24,10 @@ On an Apache Spark standalone cluster
 ./gradlew build
 
 # https://github.com/tensorflow/ecosystem/tree/master/hadoop#build-and-install
-# cp <path-to-ecosystem-hadoop>/target/tensorflow-hadoop-1.0-SNAPSHOT-shaded-protobuf.jar .
+cp <path-to-ecosystem-hadoop>/target/tensorflow-hadoop-1.0-SNAPSHOT-shaded-protobuf.jar .
+# or use un-official build from .m2 or .gradle cache, after ./gradlew shadowJar
+cp <path-to>/tensorflow-hadoop-1.0-01232017-SNAPSHOT-shaded-protobuf.jar .
+
 
 MASTER="<master-url>" ./sparkprep-cluster --help
 ```

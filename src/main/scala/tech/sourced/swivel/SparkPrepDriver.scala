@@ -7,7 +7,6 @@ import org.apache.spark.SparkContext
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
-import org.rogach.scallop._
 
 import org.tensorflow.example._
 import org.tensorflow.hadoop.io.WholeFileOutputFormat
@@ -91,15 +90,22 @@ object SparkPrep {
     * Reads existing vocabulary
     * @param vocabFile path to vocabulary file
     */
-  def readVocab(vocabFile: String): (Map[String, Int], Seq[(String, Int)]) = {
-    println(s"Reading vocabulary from ${vocabFile}")
-    val dict = Source.fromFile(vocabFile)
-      .getLines
-      .toList
-      .zipWithIndex
+  def readVocab(vocabFile: String, sc: SparkContext): (Map[String, Int], Seq[(String, Int)]) = {
+    val dict = if (sc == null) { //mostly for tests
+      println(s"Reading vocabulary from local FS ${vocabFile}")
+      Source.fromFile(vocabFile)
+        .getLines
+        .toList
+        .zipWithIndex
+    } else {
+      println(s"Reading vocabulary from cluster FS ${vocabFile}")
+      sc.textFile(vocabFile, 1)
+        .collect
+        .toList
+        .zipWithIndex
+    }
     val vocab = dict.toMap
     println(s"Done. ${dict.length} words found")
-
     (vocab, dict)
   }
 
@@ -166,26 +172,9 @@ object SparkPrep {
     * @return
     */
   def mergeCoocsAndShard(coocs: RDD[((Int, Int), Double)], numShards: Int): RDD[((Int, Int), Double)] = {
-    //TODO(bzz): if time permits, compare performance of 3 possible impls below
     val shardedCoocs = coocs
-      //I. repartitionAndSort + smart manual reduce over .mapPartition(), takeing advantage of key order
-      //  .repartitionAndSortWithinPartitions(new ShardPartitioner(numShards))
-      //  .mapPartitions { iter =>
-      //    for (x <- iter) {
-      //  }
-      //}
-
-      //II.
       .reduceByKey(new ShardPartitioner(numShards), _+_)
       .mapPartitions(_.toSeq.sortBy(_._1).toIterator, true)
-      // or
-      //.repartitionAndSortWithinPartitions(new ShardPartitioner(numShards))
-
-      //III. partition + dumb manual 'reduce' over .mapPartitons()
-      //.partitionBy(new ShardPartitioner(numShards))
-      //.mapPartitions { _.toArray.groupBy(_._1).mapValues(_.map(_._2).sum).toIterator }
-      //  or same, through (more performant?)
-      //.mapPartitions(reducePartition) from PairRDDFunctions.reduceByKeyLocally()
     shardedCoocs
   }
 
@@ -289,17 +278,12 @@ object SparkPrepDriver {
     val (wordToId, dict) = if (cli.vocab().isEmpty) {
       SparkPrep.buildVocab(input, cli.minCount(), cli.maxVocab(), cli.shardSize())
     } else {
-      SparkPrep.readVocab(cli.vocab())
+      SparkPrep.readVocab(cli.vocab(), sc)
     }
 
     val wordToIdVar = sc.broadcast(wordToId)
     val numShards = dict.size / cli.shardSize()
     val shardSize = cli.shardSize()
-
-    // TODO(bzz) explore possible optimisations:
-    //  4b pointers -XX:+UseCompressedOops if <32Gb RAM
-    //  tune DataStructures: http://fastutil.di.unimi.it
-    //  convert to IDs and persist (measure size/throughtput)
 
     // Builds co-occurrence matrix: RDD[ ((i, j), weight)
     val coocs = SparkPrep.buildCooccurrenceMatrix(
@@ -315,8 +299,8 @@ object SparkPrepDriver {
     }, true)
     serializedPb.saveAsNewAPIHadoopFile[WholeFileOutputFormat](cli.outputDir())
 
-    writeRowColDict(dict, cli.outputDir())
-    writeAndCountRowColSums(shardedCoocs, cli.outputDir())
+    writeRowColDict(sc.parallelize(dict, 1), cli.outputDir())
+    writeAndCountRowColSums(shardedCoocs, cli.outputDir(), sc)
   }
 
   /**
@@ -325,12 +309,12 @@ object SparkPrepDriver {
     * @param dict
     * @param outputDir
     */
-  def writeRowColDict(dict: Seq[(String, Int)], outputDir: String, debug: Boolean = false) = {
-    writeDict(dict, outputDir, "row_vocab.txt", debug)
-    writeDict(dict, outputDir, "col_vocab.txt", debug)
+  def writeRowColDict(dict: RDD[(String, Int)], outputDir: String, debug: Boolean = false) = {
+    writeDictToHdfs(dict, outputDir, "row_vocab.txt", debug)
+    writeDictToHdfs(dict, outputDir, "col_vocab.txt", debug)
   }
 
-  def writeDict(dict: Seq[(String, Int)], outputDir: String, fileName: String, debug: Boolean) = {
+  def writeDictToLocalFs(dict: Seq[(String, Int)], outputDir: String, fileName: String, debug: Boolean) = {
     val path = outputDir :: fileName :: Nil mkString File.separator
     println(s"Writing dict to $path")
     new java.io.PrintWriter(path) {
@@ -346,12 +330,17 @@ object SparkPrepDriver {
     }
   }
 
+  def writeDictToHdfs(dict: RDD[(String, Int)], outputDir: String, fileName: String, debug: Boolean) = {
+    val path = outputDir :: fileName :: Nil mkString File.separator
+    dict.map(_._1).saveAsTextFile(path)
+  }
+
   /**
     * Counts and writes marginal row and column sums to `{row, col}_sums.txt`
     *
     * @param coocs the co-occurrence matrix
     */
-  def writeAndCountRowColSums(coocs: RDD[((Int, Int), Double)], outputDir: String) = {
+  def writeAndCountRowColSums(coocs: RDD[((Int, Int), Double)], outputDir: String, sc: SparkContext) = {
     val sum = coocs
       .flatMap { case ((i, j), w) =>
         Seq((i, w), (j, w))
@@ -360,11 +349,13 @@ object SparkPrepDriver {
       .collect() //vocabulary fits in memory, so avoid extra shuffle and sort on driver
       .sortBy(_._1)
 
-      witeSum(sum, outputDir, "row_sums.txt")
-      witeSum(sum, outputDir, "col_sums.txt")
+    val pSum = sc.parallelize(sum, 1)
+
+    writeSumToHdfs(pSum, outputDir, "row_sums.txt")
+    writeSumToHdfs(pSum, outputDir, "col_sums.txt")
   }
 
-  def witeSum(sum: Array[(Int, Double)], outputDir: String, fileName: String) = {
+  def writeSumToLocalFs(sum: Array[(Int, Double)], outputDir: String, fileName: String) = {
     val path = outputDir :: fileName :: Nil mkString File.separator
     println(s"Writing sum to $path")
     new java.io.PrintWriter(path) {
@@ -374,6 +365,11 @@ object SparkPrepDriver {
         }
       } finally { close }
     }
+  }
+
+  def writeSumToHdfs(dict: RDD[(Int, Double)], outputDir: String, fileName: String) = {
+    val path = outputDir :: fileName :: Nil mkString File.separator
+    dict.map(_._2 / 2).saveAsTextFile(path)
   }
 
   def getContext(sparkMaster: String): (SparkContext, SparkSession) = {

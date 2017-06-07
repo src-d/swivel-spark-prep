@@ -72,4 +72,18 @@ class DictionarySmallTest extends FunSuite {
     assert(vocab("b") == 1)
   }
 
+  test("read vocabulary: local path") {
+    // given
+    val path = "src/test/resources/row_vocab.txt"
+
+    // when
+    val (_, dict) = SparkPrep.readVocab(path, null)
+
+    // then
+    assert(dict.size === 4)
+    assert(dict.head == ("a", 0))
+    assert(dict.last == ("d", 3))
+  }
+
+
 }
