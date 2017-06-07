@@ -31,3 +31,15 @@ cp <path-to>/tensorflow-hadoop-1.0-01232017-SNAPSHOT-shaded-protobuf.jar .
 
 MASTER="<master-url>" ./sparkprep-cluster --help
 ```
+
+# Algorithm
+
+Pre-processing consist of 3 jobs:
+ 1. reading or creating a vocabulary
+ 2. coocurence matrix
+  - vectorizing input: token->int using the vocaulary
+  - build full dense coocurence matrix, for given window size
+  - shard coocurence matrix to N pices (over each dimention)
+     * encode each shard in a single ProtoBuff
+     * save N^2 files
+ 3. coocurence matrix: count marginal summs

@@ -117,8 +117,8 @@ object SparkPrep {
     * @return
     */
   def wordsToIds(rdd: RDD[Array[String]], wordToIdVar: Broadcast[Map[String, Int]]) = {
-    rdd.map(line => {
-        line.flatMap { // flat is important, skips OOV
+    rdd.map(tokens => {
+        tokens.flatMap { // flat is important, skips OOV
           wordToIdVar.value.get(_)
         }
       })
@@ -147,21 +147,22 @@ object SparkPrep {
   }
 
   def generateCooccurrence(ids: Array[Int], windowSize: Int) = {
+    //TODO(bzz): compare perf vs JHashMap (as in org.apache.spark.rdd.PairRDDFunctions.reduceByKeyLocally)
     val coocs = mutable.HashMap[(Int, Int), Double]().withDefaultValue(0)
-      0 until ids.length foreach { pos =>
-        val lid = ids(pos)
-        val windowExtent = Math.min(windowSize + 1, ids.length - pos)
-        1 until windowExtent foreach { off =>
-          val rid = ids(pos + off)
-          val count = 1.0 / off
-          val pair = (Math.min(lid, rid), Math.max(lid, rid))
-          coocs(pair) += count
-          coocs(pair.swap) += count
-        }
-        val pair = (lid, lid)
-        coocs(pair) += 1.0  // Add 1 (not 1/2 as before) since we do not output (a, b) and (b, a) separately
+    0 until ids.length foreach { pos =>
+      val lid = ids(pos)
+      val windowExtent = Math.min(windowSize + 1, ids.length - pos)
+      1 until windowExtent foreach { off =>
+        val rid = ids(pos + off)
+        val count = 1.0 / off
+        val pair = (Math.min(lid, rid), Math.max(lid, rid))
+        coocs(pair) += count
+        coocs(pair.swap) += count
       }
-      coocs
+      val pair = (lid, lid)
+      coocs(pair) += 1.0  // Add 1 (not 1/2 as before) since we do not output (a, b) and (b, a) separately
+    }
+    coocs
   }
 
   /**
@@ -200,7 +201,7 @@ object SparkPrep {
     val intListRow = Int64List.newBuilder()
     val intListCol = Int64List.newBuilder()
 
-    //invers of ShardPartitioner.getPartition()
+    //inverse of ShardPartitioner.getPartition()
     val row_shard = index % numShards
     val col_shard = index / numShards
     for (i <- 0 to shardSize - 1) {
@@ -283,6 +284,7 @@ object SparkPrepDriver {
 
     val wordToIdVar = sc.broadcast(wordToId)
     val numShards = dict.size / cli.shardSize()
+    print(s"Breaking matrix to $numShards shards")
     val shardSize = cli.shardSize()
 
     // Builds co-occurrence matrix: RDD[ ((i, j), weight)
@@ -297,6 +299,7 @@ object SparkPrepDriver {
     val serializedPb = shardedCoocs.mapPartitionsWithIndex( (index, partition) => {
       SparkPrep.convertToProtobuf(index, partition, numShards, shardSize)
     }, true)
+
     serializedPb.saveAsNewAPIHadoopFile[WholeFileOutputFormat](cli.outputDir())
 
     writeRowColDict(sc.parallelize(dict, 1), cli.outputDir())
