@@ -1,17 +1,20 @@
 package tech.sourced.swivel
 
 import java.io.File
+import java.util.{HashMap => JHashMap}
 
 import org.apache.hadoop.io.{BytesWritable, NullWritable}
 import org.apache.spark.SparkContext
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.storage.StorageLevel
 
 import org.tensorflow.example._
 import org.tensorflow.hadoop.io.WholeFileOutputFormat
 
 import scala.collection.mutable
+import scala.collection.JavaConverters._
 import scala.io.Source
 import scala.util.Properties
 
@@ -116,7 +119,9 @@ object SparkPrep {
     * @param wordToIdVar
     * @return
     */
-  def wordsToIds(rdd: RDD[Array[String]], wordToIdVar: Broadcast[Map[String, Int]]) = {
+  def wordsToIds(rdd: RDD[Array[String]], wordToIdVar: Broadcast[Map[String, Int]]): RDD[Array[Int]] = {
+    //https://github.com/src-d/swivel-spark-prep/issues/5
+    //Re-implement using RDD[fastutils.IntArrayList]
     rdd.map(tokens => {
         tokens.flatMap { // flat is important, skips OOV
           wordToIdVar.value.get(_)
@@ -130,14 +135,12 @@ object SparkPrep {
     *
     * @param rdd Tokenized lines of input
     * @param windowSize size of co-occurrence window
-    * @param numShards numer of shards
     * @param vocab word -> id
     * @return co-occurrence matrix as ((i, j), weight)
     */
   def buildCooccurrenceMatrix(
     rdd: RDD[Array[String]],
     windowSize: Int,
-    numShards: Int,
     vocab: Broadcast[Map[String, Int]]
   ): RDD[((Int, Int), Double)] = {
 
@@ -147,7 +150,8 @@ object SparkPrep {
   }
 
   def generateCooccurrence(ids: Array[Int], windowSize: Int) = {
-    //TODO(bzz): compare perf vs JHashMap (as in org.apache.spark.rdd.PairRDDFunctions.reduceByKeyLocally)
+    //https://github.com/src-d/swivel-spark-prep/issues/5
+    //Re-implement using fastutils.ObjectIntMap
     val coocs = mutable.HashMap[(Int, Int), Double]().withDefaultValue(0)
     0 until ids.length foreach { pos =>
       val lid = ids(pos)
@@ -177,6 +181,49 @@ object SparkPrep {
       .reduceByKey(new ShardPartitioner(numShards), _+_)
       .mapPartitions(_.toSeq.sortBy(_._1).toIterator, true)
     shardedCoocs
+  }
+
+  /**
+    * This is equivalent of above, but
+    *  - leveraging efficient sort in repartitionAndSortWithinPartitions()
+    *  - manual map-side aggregate, taking advantage of partitions being sorted
+    */
+  def mergeCoocsAndShard2(coocs: RDD[((Int, Int), Double)], numShards: Int): RDD[((Int, Int), Double)] = {
+    val shardedCoocs = coocs
+      .repartitionAndSortWithinPartitions(new ShardPartitioner(numShards))
+      .mapPartitionsWithIndex( (i, entries) => {
+        val map = new JHashMap[(Int, Int), Double]
+        var curEntry = entries.next()
+        var acc = curEntry._2
+        if (!entries.hasNext) {
+          map.put(curEntry._1, acc)
+        }
+        while (entries.hasNext) {
+          val nextEntry = entries.next()
+          if (curEntry._1 == nextEntry._1) {
+            acc += nextEntry._2
+            if (!entries.hasNext) {
+              map.put(curEntry._1, acc)
+            }
+          } else {
+            map.put(curEntry._1, acc)
+            curEntry = nextEntry
+            acc = nextEntry._2
+          }
+        }
+        map.asScala.iterator
+      }, true)
+    shardedCoocs
+  }
+
+  /**
+    * This is another equivalent of the above, combining both techniques
+    */
+  def mergeCoocsAndShard3(coocs: RDD[((Int, Int), Double)], numShards: Int): RDD[((Int, Int), Double)] = {
+    coocs
+      .repartitionAndSortWithinPartitions(new ShardPartitioner(numShards))
+      .mapPartitions(_.toSeq.sortBy(_._1).toIterator, true)
+    coocs
   }
 
   /**
@@ -258,6 +305,7 @@ class ShardPartitioner(numShards: Int) extends org.apache.spark.Partitioner {
 
   override def hashCode: Int = numPartitions
 }
+//TODO(bzz): add companion object and extract
 
 
 object SparkPrepDriver {
@@ -290,10 +338,11 @@ object SparkPrepDriver {
     // Builds co-occurrence matrix: RDD[ ((i, j), weight)
     val coocs = SparkPrep.buildCooccurrenceMatrix(
       input.map(_.split("\t")),
-      cli.windowSize(), numShards,
+      cli.windowSize(),
       wordToIdVar
     )
-    val shardedCoocs = SparkPrep.mergeCoocsAndShard(coocs, numShards)
+    val shardedCoocs = SparkPrep.mergeCoocsAndShard2(coocs, numShards)
+    shardedCoocs.persist(StorageLevel.MEMORY_AND_DISK_SER)
 
     //Output single tf.train.Example per partition
     val serializedPb = shardedCoocs.mapPartitionsWithIndex( (index, partition) => {

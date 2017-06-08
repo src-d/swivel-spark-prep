@@ -65,7 +65,7 @@ class CoocsMatrixMediumTest extends FunSuite with SharedSparkContext {
     ids should equal (expectedIds)
   }
 
-  test("Coocs: raw lines of tokens to coocurences") {
+  test("Coocs: raw lines of tokens to concurrences") {
     val numShards = 3
     val expectedCoocs = Seq(
       ((id("a"), id("a")), 2.0),
@@ -85,14 +85,13 @@ class CoocsMatrixMediumTest extends FunSuite with SharedSparkContext {
     val tokenLines = Seq(Array("a","b"), Array("a","b","c"))
 
     // when
-    val coocs = SparkPrep.mergeCoocsAndShard(
-      SparkPrep.buildCooccurrenceMatrix(sc.parallelize(tokenLines), wordWindow, numShards, wordToIdVar),
+    val coocs = SparkPrep.mergeCoocsAndShard2(
+      SparkPrep.buildCooccurrenceMatrix(sc.parallelize(tokenLines), wordWindow, wordToIdVar),
       numShards
-    )
-      .collect()
+    ).collect()
 
     // then
-    assert(coocs.length == expectedCoocs.length)
+    //assert(coocs.length == expectedCoocs.length)
     coocs.sortBy(_._1) should equal (expectedCoocs)
   }
 
@@ -139,7 +138,7 @@ class CoocsMatrixMediumTest extends FunSuite with SharedSparkContext {
       ((3,3),1.0))
 
     // when
-    val shards = SparkPrep.mergeCoocsAndShard(sc.parallelize(unMergedCoocsFor3Lines), shardSize)
+    val shards = SparkPrep.mergeCoocsAndShard2(sc.parallelize(unMergedCoocsFor3Lines), shardSize)
 
     // then
     assert(shards.getNumPartitions == shardSize*shardSize)
