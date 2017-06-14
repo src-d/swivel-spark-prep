@@ -91,7 +91,7 @@ class CoocsMatrixMediumTest extends FunSuite with SharedSparkContext {
     ).collect()
 
     // then
-    //assert(coocs.length == expectedCoocs.length)
+    assert(coocs.length == expectedCoocs.length)
     coocs.sortBy(_._1) should equal (expectedCoocs)
   }
 

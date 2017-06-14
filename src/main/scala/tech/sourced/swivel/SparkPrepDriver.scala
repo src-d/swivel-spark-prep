@@ -9,12 +9,11 @@ import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.storage.StorageLevel
-
 import org.tensorflow.example._
 import org.tensorflow.hadoop.io.WholeFileOutputFormat
 
-import scala.collection.mutable
 import scala.collection.JavaConverters._
+import scala.collection.mutable
 import scala.io.Source
 import scala.util.Properties
 
@@ -120,8 +119,8 @@ object SparkPrep {
     * @return
     */
   def wordsToIds(rdd: RDD[Array[String]], wordToIdVar: Broadcast[Map[String, Int]]): RDD[Array[Int]] = {
+    //TODO(bzz): Re-implement using RDD[fastutils.IntArrayList]
     //https://github.com/src-d/swivel-spark-prep/issues/5
-    //Re-implement using RDD[fastutils.IntArrayList]
     rdd.map(tokens => {
         tokens.flatMap { // flat is important, skips OOV
           wordToIdVar.value.get(_)
@@ -150,8 +149,8 @@ object SparkPrep {
   }
 
   def generateCooccurrence(ids: Array[Int], windowSize: Int) = {
+    //TODO(bzz): Re-implement using fastutils.ObjectIntMap
     //https://github.com/src-d/swivel-spark-prep/issues/5
-    //Re-implement using fastutils.ObjectIntMap
     val coocs = mutable.HashMap[(Int, Int), Double]().withDefaultValue(0)
     0 until ids.length foreach { pos =>
       val lid = ids(pos)
